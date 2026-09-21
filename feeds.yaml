@@ -1,0 +1,2 @@
+# Static feed list merged on startup (admin can also manage via bot commands)
+feeds: []
