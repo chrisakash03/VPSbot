@@ -1,10 +1,23 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from vpsbot.db.models import RecurrenceKind
-from vpsbot.reminders.schedule_spec import EndKind, ScheduleEnd, ScheduleSpec
-from vpsbot.reminders.text_normalize import FOR_DAYS_RE, FOR_WEEKS_RE, TIMES_RE
+from vpsbot.reminders.parsing import ParsedReminder
+from vpsbot.reminders.schedule_spec import (
+    EndKind,
+    ParseSource,
+    ScheduleEnd,
+    ScheduleSpec,
+    parsed_reminder_to_spec,
+    validate_schedule_spec,
+)
+from vpsbot.reminders.text_normalize import (
+    FOR_DAYS_RE,
+    FOR_WEEKS_RE,
+    TIMES_RE,
+    has_schedule_bound_phrase,
+)
 
 
 def _set_duration_end(spec: ScheduleSpec, days: int) -> None:
@@ -13,6 +26,26 @@ def _set_duration_end(spec: ScheduleSpec, days: int) -> None:
         duration_days=days,
         until_utc=spec.start_at_utc + timedelta(days=days),
     )
+
+
+def fast_bounded_spec_if_complete(
+    text: str,
+    fast_result: ParsedReminder,
+    now_utc: datetime,
+) -> ScheduleSpec | None:
+    """Use fast parse + text bounds when that fully resolves a bounded recurrence phrase."""
+    if not has_schedule_bound_phrase(text):
+        return None
+    spec = parsed_reminder_to_spec(fast_result, ParseSource.FAST)
+    if spec.recurrence == RecurrenceKind.NONE:
+        return None
+    end_before = spec.end.kind
+    apply_end_bound_from_text(text, spec)
+    if spec.end.kind == EndKind.NONE or spec.end.kind == end_before:
+        return None
+    if validate_schedule_spec(spec, now_utc):
+        return None
+    return spec
 
 
 def apply_end_bound_from_text(text: str, spec: ScheduleSpec) -> ScheduleSpec:

@@ -7,7 +7,19 @@ from vpsbot.utils.timezone import format_local
 
 def format_schedule_preview(spec: ScheduleSpec, tz_name: str) -> str:
     when = format_local(spec.start_at_utc, tz_name)
-    return f"Reminder: '{spec.message}' — {when}"
+    parts = [f"Reminder: '{spec.message}' — {when}"]
+    if spec.recurrence != RecurrenceKind.NONE:
+        recur = spec.recurrence.value
+        if spec.recurrence == RecurrenceKind.INTERVAL and spec.interval_days:
+            recur = f"every {spec.interval_days} days"
+        elif spec.recurrence == RecurrenceKind.DAILY:
+            recur = "every day"
+        parts.append(f"Repeats: {recur}.")
+        if spec.end.kind == EndKind.MAX_OCCURRENCES and spec.end.remaining_occurrences:
+            parts.append(f"For {spec.end.remaining_occurrences} times.")
+        elif spec.end.kind == EndKind.DURATION_DAYS and spec.end.duration_days:
+            parts.append(f"For {spec.end.duration_days} days.")
+    return " ".join(parts)
 
 
 def format_schedule_summary(

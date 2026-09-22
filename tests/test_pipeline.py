@@ -9,7 +9,7 @@ from pathlib import Path
 
 from vpsbot.db.models import RecurrenceKind
 from vpsbot.reminders.pipeline import parse_reminder_pipeline
-from vpsbot.reminders.schedule_spec import ScheduleEnd, ScheduleSpec, EndKind, ParseSource
+from vpsbot.reminders.schedule_spec import EndKind, ParseSource, ReviewAction, ScheduleEnd, ScheduleSpec
 
 
 def _settings(**kwargs) -> Settings:
@@ -71,3 +71,21 @@ async def test_pipeline_invokes_jev_on_complex():
         )
     assert result.spec is not None
     assert result.spec.recurrence == RecurrenceKind.INTERVAL
+
+
+@pytest.mark.asyncio
+async def test_pipeline_skips_jev_for_daily_for_n_days():
+    now = datetime(2026, 9, 22, 2, 0, tzinfo=ZoneInfo("UTC"))
+    jev = AsyncMock()
+    with patch("vpsbot.reminders.pipeline.parse_with_jev", new=jev):
+        result = await parse_reminder_pipeline(
+            "do survey everyday at 8pm for 3 days",
+            _settings(),
+            now_utc=now,
+        )
+    jev.assert_not_called()
+    assert result.spec is not None
+    assert result.spec.source == ParseSource.FAST
+    assert result.spec.review == ReviewAction.AUTO
+    assert result.spec.end.kind == EndKind.MAX_OCCURRENCES
+    assert result.spec.end.remaining_occurrences == 3

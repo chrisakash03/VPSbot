@@ -6,7 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from vpsbot.config import Settings
-from vpsbot.reminders.bounds import apply_end_bound_from_text
+from vpsbot.reminders.bounds import apply_end_bound_from_text, fast_bounded_spec_if_complete
 from vpsbot.reminders.text_normalize import normalize_reminder_text
 from vpsbot.reminders.jev.client import parse_with_jev
 from vpsbot.reminders.parsing import ParseError, parse_reminder_text
@@ -80,6 +80,11 @@ async def parse_reminder_pipeline(
             return PipelineResult(error=str(fast_error) if fast_error else "Could not parse reminder.")
         spec = parsed_reminder_to_spec(fast_result, ParseSource.FAST)
         return _prepare_spec(spec, text, settings, now_utc)
+
+    if fast_result is not None:
+        bounded = fast_bounded_spec_if_complete(text, fast_result, now_utc)
+        if bounded is not None:
+            return PipelineResult(spec=_apply_confidence_gate(bounded, settings))
 
     if not settings.jev_enabled:
         if fast_result is not None:
