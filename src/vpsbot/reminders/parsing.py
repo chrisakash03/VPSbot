@@ -221,10 +221,13 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
         if anchored is not None:
             use_token = not matches or _matches_are_only_day_anchors(matches)
             if not use_token and len(matches) == 1:
-                frag, _ = matches[0]
+                frag, match_dt = matches[0]
                 compact = token.replace(" ", "").lower()
                 if compact in frag.replace(" ", "").lower():
-                    use_token = True
+                    anchored_utc = to_utc(anchored, tz_name).date()
+                    match_utc = to_utc(match_dt, tz_name).date()
+                    # e.g. "at 6pm on 23 september 2026" — keep the full calendar match, not today+time.
+                    use_token = anchored_utc == match_utc
             if use_token:
                 return to_utc(anchored, tz_name)
 

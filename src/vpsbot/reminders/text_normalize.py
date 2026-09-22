@@ -9,6 +9,7 @@ TIMES_RE = re.compile(r"\b(\d+)\s+times\b", re.I)
 
 def normalize_reminder_text(text: str) -> str:
     """Normalize common phrasing before fast parse or Jev."""
+    text = re.sub(r"^(?:/r(?:@[\w]+)?\s+)+", "", text.strip(), flags=re.I)
     return re.sub(r"\beveryday\b", "every day", text, flags=re.I)
 
 

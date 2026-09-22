@@ -53,6 +53,19 @@ def test_parse_time_only_today():
     assert local.hour == 12 and local.minute == 48
 
 
+def test_parse_absolute_date_with_time():
+    now = datetime(2026, 9, 22, 11, 35, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "collect parcel from chop ah tat at 6pm on 23 september 2026",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert local.year == 2026 and local.month == 9 and local.day == 23
+    assert local.hour == 18 and local.minute == 0
+    assert "collect parcel" in parsed.message.lower()
+
+
 def test_parse_daily_recurrence():
     now = datetime(2026, 1, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
     parsed = parse_reminder_text("every day at 8am drink water", "UTC", now_utc=now)
