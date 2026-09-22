@@ -5,9 +5,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from vpsbot.app_state import get_state
-from vpsbot.db.models import RecurrenceKind, Reminder, SchedulerAuditLog
-from vpsbot.reminders.recurrence import load_rule, next_occurrence
-from vpsbot.reminders.service import reschedule_after_fire
+from vpsbot.db.models import Reminder
+from vpsbot.reminders.delivery import deliver_reminder
 from vpsbot.rss.digest_runner import run_daily_digest
 from vpsbot.rss.poller import poll_all_feeds
 
@@ -24,27 +23,13 @@ async def fire_reminder_job(reminder_id: int) -> None:
         reminder = await session.get(Reminder, reminder_id)
         if not reminder or not reminder.active:
             return
-        chat_id = reminder.chat_id
-        text = reminder.message
-        scheduled_for = reminder.next_fire_at
-        session.add(
-            SchedulerAuditLog(
-                job_id=job_id,
-                reminder_id=reminder_id,
-                scheduled_for=scheduled_for,
-                fired_at=fired_at,
-                event="fired",
-            )
+        updated = await deliver_reminder(
+            session,
+            state.bot,
+            reminder,
+            job_id=job_id,
+            late=False,
         )
-        await session.commit()
-
-    await state.bot.send_message(chat_id, f"⏰ Reminder: {text}")
-
-    async with state.session_factory() as session:
-        reminder = await session.get(Reminder, reminder_id)
-        if not reminder:
-            return
-        updated = await reschedule_after_fire(session, reminder)
 
     if updated:
         await state.scheduler.schedule_reminder(updated)

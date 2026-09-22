@@ -17,6 +17,8 @@ class AppState:
     session_factory: async_sessionmaker[AsyncSession]
     scheduler: BotScheduler
     bot: Bot
+    bot_id: int = 0
+    bot_username: str = ""
 
 
 _state: AppState | None = None

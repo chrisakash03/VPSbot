@@ -81,7 +81,36 @@ def next_occurrence(
             candidate = _safe_month_day(year + 1, month, day, hour, minute)
         return candidate
 
+    if kind == RecurrenceKind.INTERVAL:
+        interval_days = int(rule.get("interval_days", 1))
+        candidate = anchor
+        while candidate <= after_utc:
+            candidate += timedelta(days=interval_days)
+        return candidate
+
     raise ValueError(f"Unsupported recurrence kind: {kind}")
+
+
+def series_should_end(rule: dict[str, Any], next_fire_utc: datetime) -> bool:
+    ends_at = rule.get("ends_at")
+    if ends_at:
+        end_dt = datetime.fromisoformat(ends_at)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=ZoneInfo("UTC"))
+        if next_fire_utc > end_dt:
+            return True
+    remaining = rule.get("remaining_occurrences")
+    if remaining is not None and int(remaining) <= 0:
+        return True
+    return False
+
+
+def decrement_occurrence_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(rule)
+    remaining = updated.get("remaining_occurrences")
+    if remaining is not None:
+        updated["remaining_occurrences"] = max(0, int(remaining) - 1)
+    return updated
 
 
 def _next_month(year: int, month: int) -> tuple[int, int]:

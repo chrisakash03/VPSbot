@@ -18,7 +18,5 @@ COPY --from=builder /install /usr/local
 COPY requirements.txt .
 COPY feeds.yaml .
 COPY src ./src
-COPY tests ./tests
-COPY pytest.ini .
 
 CMD ["python", "-m", "vpsbot.main"]

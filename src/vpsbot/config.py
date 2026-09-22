@@ -33,6 +33,15 @@ class Settings:
     digest_send_empty: bool
     rss_poll_interval_minutes: int
     database_path: Path
+    jev_enabled: bool
+    typesafe_api_key: str | None
+    jev_model: str
+    jev_confidence_auto: float
+    jev_confidence_min: float
+    jev_timeout_seconds: float
+    digest_group_chat_id: int | None
+    reminder_retention_days: int
+    scheduler_audit_retention_days: int
 
     @property
     def database_url_async(self) -> str:
@@ -55,4 +64,20 @@ def load_settings() -> Settings:
         digest_send_empty=_bool("DIGEST_SEND_EMPTY", False),
         rss_poll_interval_minutes=int(_require("RSS_POLL_INTERVAL_MINUTES")),
         database_path=db_path,
+        jev_enabled=_bool("JEV_ENABLED", False),
+        typesafe_api_key=os.getenv("TYPESAFE_API_KEY"),
+        jev_model=os.getenv("JEV_MODEL", "jev-latest"),
+        jev_confidence_auto=float(os.getenv("JEV_CONFIDENCE_AUTO", "0.85")),
+        jev_confidence_min=float(os.getenv("JEV_CONFIDENCE_MIN", "0.60")),
+        jev_timeout_seconds=float(os.getenv("JEV_TIMEOUT_SECONDS", "30")),
+        digest_group_chat_id=_optional_int("DIGEST_GROUP_CHAT_ID"),
+        reminder_retention_days=int(os.getenv("REMINDER_RETENTION_DAYS", "90")),
+        scheduler_audit_retention_days=int(os.getenv("SCHEDULER_AUDIT_RETENTION_DAYS", "30")),
     )
+
+
+def _optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if not raw or not raw.strip():
+        return None
+    return int(raw.strip())

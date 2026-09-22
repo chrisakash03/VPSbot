@@ -8,7 +8,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpsbot.db.models import RecurrenceKind, Reminder
 from vpsbot.reminders.parsing import recurrence_rule_to_json
-from vpsbot.reminders.recurrence import load_rule, next_occurrence
+from vpsbot.reminders.recurrence import (
+    decrement_occurrence_rule,
+    load_rule,
+    next_occurrence,
+    series_should_end,
+)
+from vpsbot.reminders.schedule_spec import ScheduleSpec
+
+
+async def create_reminder_from_spec(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    chat_id: int,
+    notify_chat_id: int,
+    spec: ScheduleSpec,
+) -> Reminder:
+    parsed = spec.to_parsed_reminder()
+    return await create_reminder(
+        session,
+        user_id=user_id,
+        chat_id=chat_id,
+        notify_chat_id=notify_chat_id,
+        message=parsed.message,
+        fire_at_utc=parsed.fire_at_utc,
+        recurrence=parsed.recurrence,
+        recurrence_rule=parsed.recurrence_rule,
+    )
 
 
 async def create_reminder(
@@ -16,6 +43,7 @@ async def create_reminder(
     *,
     user_id: int,
     chat_id: int,
+    notify_chat_id: int,
     message: str,
     fire_at_utc: datetime,
     recurrence: RecurrenceKind,
@@ -25,6 +53,7 @@ async def create_reminder(
     reminder = Reminder(
         user_id=user_id,
         chat_id=chat_id,
+        notify_chat_id=notify_chat_id,
         message=message,
         next_fire_at=fire_at_utc,
         recurrence=recurrence.value,
@@ -76,9 +105,21 @@ async def reschedule_after_fire(session: AsyncSession, reminder: Reminder) -> Re
         await session.commit()
         return None
 
+    rule = decrement_occurrence_rule(rule)
+    if rule.get("remaining_occurrences") is not None and int(rule["remaining_occurrences"]) <= 0:
+        reminder.active = False
+        reminder.recurrence_rule = recurrence_rule_to_json(rule)
+        await session.commit()
+        return None
     now = datetime.now(ZoneInfo("UTC"))
     nxt = next_occurrence(kind, rule, now)
+    if series_should_end(rule, nxt):
+        reminder.active = False
+        reminder.recurrence_rule = recurrence_rule_to_json(rule)
+        await session.commit()
+        return None
     reminder.next_fire_at = nxt
+    reminder.recurrence_rule = recurrence_rule_to_json(rule)
     await session.commit()
     await session.refresh(reminder)
     return reminder

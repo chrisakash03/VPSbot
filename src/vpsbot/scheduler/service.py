@@ -14,8 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vpsbot.config import Settings
-from vpsbot.db.models import RecurrenceKind, Reminder, SchedulerAuditLog
-from vpsbot.reminders.recurrence import load_rule, next_occurrence
+from vpsbot.utils.timezone import ensure_utc
+from vpsbot.db.models import Reminder, SchedulerAuditLog
 from vpsbot.scheduler import jobs
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class BotScheduler:
 
     async def schedule_reminder(self, reminder: Reminder) -> None:
         job_id = self._job_id_reminder(reminder.id)
-        run_date = reminder.next_fire_at.astimezone(ZoneInfo("UTC"))
+        run_date = ensure_utc(reminder.next_fire_at)
         self.scheduler.add_job(
             jobs.fire_reminder_job,
             trigger=DateTrigger(run_date=run_date),
@@ -102,23 +102,17 @@ class BotScheduler:
             result = await session.execute(stmt)
             reminders = list(result.scalars().all())
         now = datetime.now(ZoneInfo("UTC"))
+        scheduled = 0
         for rem in reminders:
-            if rem.next_fire_at <= now:
-                kind = RecurrenceKind(rem.recurrence)
-                if kind == RecurrenceKind.NONE:
-                    continue
-                rule = load_rule(rem.recurrence_rule)
-                if not rule:
-                    continue
-                nxt = next_occurrence(kind, rule, now)
-                async with self.session_factory() as session:
-                    db_rem = await session.get(Reminder, rem.id)
-                    if db_rem:
-                        db_rem.next_fire_at = nxt
-                        await session.commit()
-                        rem = db_rem
+            if ensure_utc(rem.next_fire_at) <= now:
+                continue
             await self.schedule_reminder(rem)
-        logger.info("Reloaded %s active reminders into scheduler", len(reminders))
+            scheduled += 1
+        logger.info(
+            "Reloaded %s active reminder(s) into scheduler (%s skipped as still overdue)",
+            scheduled,
+            len(reminders) - scheduled,
+        )
 
     def schedule_rss_poll(self) -> None:
         minutes = self.settings.rss_poll_interval_minutes

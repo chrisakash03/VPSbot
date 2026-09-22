@@ -1,2 +1,6 @@
-# Static feed list merged on startup (admin can also manage via bot commands)
-feeds: []
+# Static feed list — merged into the DB on each bot startup (existing URLs are skipped).
+# Edit this file, then restart: docker compose restart bot
+# In dev, feeds.yaml is bind-mounted; in prod it is baked into the image (rebuild after edits).
+feeds:
+  # - https://hnrss.org/frontpage
+  # - https://www.reddit.com/r/python/.rss

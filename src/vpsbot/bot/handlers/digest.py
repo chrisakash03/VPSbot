@@ -1,40 +1,54 @@
 from __future__ import annotations
 
 from aiogram import Router
-from aiogram.filters import Command
+from aiogram.enums import ChatType
+from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
-from sqlalchemy import select
 
 from vpsbot.bot.deps import BotContext
-from vpsbot.db.models import DigestSubscriber
+from vpsbot.rss.digest_group import set_digest_group_enabled
 
 router = Router(name="digest")
 
 
 @router.message(Command("digest"))
-async def cmd_digest(message: Message, ctx: BotContext) -> None:
-    arg = (message.text or "").removeprefix("/digest").strip().lower()
+async def cmd_digest(message: Message, command: CommandObject, ctx: BotContext) -> None:
+    arg = (command.args or "").strip().lower()
     if arg not in {"on", "off"}:
-        await message.answer("Usage: /digest on — subscribe to daily digest\n/digest off — unsubscribe")
+        await message.answer(
+            "Usage: /digest on — enable daily digest in this group\n/digest off — disable"
+        )
         return
+
+    if message.chat.type == ChatType.PRIVATE:
+        await message.answer("Digest is only enabled in the configured group.")
+        return
+
+    group_id = ctx.settings.digest_group_chat_id
+    if group_id is None:
+        await message.answer(
+            "Digest group is not configured. Set DIGEST_GROUP_CHAT_ID in .env "
+            "(use /chatid in the target group while admin)."
+        )
+        return
+
+    if message.chat.id != group_id:
+        await message.answer("Digest can only be toggled in the configured digest group.")
+        return
+
+    if message.from_user.id != ctx.settings.telegram_admin_user_id:
+        await message.answer("Admin only.")
+        return
+
     enabled = arg == "on"
     async with ctx.session_factory() as session:
-        result = await session.execute(
-            select(DigestSubscriber).where(DigestSubscriber.user_id == message.from_user.id)
+        await set_digest_group_enabled(
+            session,
+            group_chat_id=group_id,
+            enabled=enabled,
+            updated_by=message.from_user.id,
         )
-        sub = result.scalar_one_or_none()
-        if sub is None:
-            sub = DigestSubscriber(
-                user_id=message.from_user.id,
-                chat_id=message.chat.id,
-                enabled=enabled,
-            )
-            session.add(sub)
-        else:
-            sub.enabled = enabled
-            sub.chat_id = message.chat.id
-        await session.commit()
     if enabled:
-        await message.answer("You'll receive the daily RSS digest.")
+        await message.answer("Daily RSS digest enabled for this group.")
     else:
-        await message.answer("Daily digest disabled.")
+        await message.answer("Daily RSS digest disabled for this group.")
