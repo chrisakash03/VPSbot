@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -54,8 +56,13 @@ async def run_daily_digest(
         )
         for item in items
     ]
+    digest_date = datetime.now(ZoneInfo(settings.timezone)).strftime("%d %B %Y")
     try:
-        summary = summarize_digest(digest_items, api_key=settings.openai_api_key)
+        summary = summarize_digest(
+            digest_items,
+            api_key=settings.openai_api_key,
+            digest_date=digest_date,
+        )
     except Exception as exc:
         logger.exception("Digest LLM failed: %s", exc)
         summary = "Daily digest failed to generate. Check bot logs."
