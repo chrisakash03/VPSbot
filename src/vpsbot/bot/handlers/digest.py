@@ -7,6 +7,7 @@ from aiogram.types import Message
 
 from vpsbot.bot.deps import BotContext
 from vpsbot.rss.digest_group import set_digest_group_enabled
+from vpsbot.rss.digest_runner import run_digest
 
 router = Router(name="digest")
 
@@ -52,3 +53,23 @@ async def cmd_digest(message: Message, command: CommandObject, ctx: BotContext) 
         await message.answer("Daily RSS digest enabled for this group.")
     else:
         await message.answer("Daily RSS digest disabled for this group.")
+
+
+@router.message(Command("digestnow"))
+async def cmd_digestnow(message: Message, ctx: BotContext) -> None:
+    if message.from_user is None or message.from_user.id != ctx.settings.telegram_admin_user_id:
+        await message.answer("Admin only.")
+        return
+
+    await message.answer("Generating digest…", parse_mode=None)
+
+    async def send(chat_id: int, text: str) -> None:
+        await message.bot.send_message(chat_id, text)
+
+    await run_digest(
+        ctx.session_factory,
+        ctx.settings,
+        send,
+        message.chat.id,
+        notify_when_empty=True,
+    )

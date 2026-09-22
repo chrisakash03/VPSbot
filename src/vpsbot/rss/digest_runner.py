@@ -17,21 +17,24 @@ from vpsbot.rss.digest_group import any_digest_group_enabled
 logger = logging.getLogger(__name__)
 
 
-async def run_daily_digest(
+async def run_digest(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     send_message: Callable[[int, str], Awaitable[None]],
+    destination_chat_id: int,
+    *,
+    require_group_enabled: int | None = None,
+    notify_when_empty: bool | None = None,
 ) -> None:
-    group_id = settings.digest_group_chat_id
-    if group_id is None:
-        logger.info("Digest skipped: DIGEST_GROUP_CHAT_ID not set")
-        return
+    if require_group_enabled is not None:
+        async with session_factory() as session:
+            if not await any_digest_group_enabled(session, require_group_enabled):
+                logger.info(
+                    "Digest skipped: disabled for group %s", require_group_enabled
+                )
+                return
 
     async with session_factory() as session:
-        if not await any_digest_group_enabled(session, group_id):
-            logger.info("Digest skipped: disabled for group %s", group_id)
-            return
-
         stmt = (
             select(RssQueueItem)
             .where(RssQueueItem.digested.is_(False))
@@ -42,8 +45,13 @@ async def run_daily_digest(
         items = list(result.scalars().all())
 
     if not items:
-        if settings.digest_send_empty:
-            await send_message(group_id, "Nothing new in your feeds today.")
+        send_empty = (
+            notify_when_empty
+            if notify_when_empty is not None
+            else settings.digest_send_empty
+        )
+        if send_empty:
+            await send_message(destination_chat_id, "Nothing new in your feeds today.")
         else:
             logger.info("Digest skipped: no new queue items")
         return
@@ -67,7 +75,7 @@ async def run_daily_digest(
         logger.exception("Digest LLM failed: %s", exc)
         summary = "Daily digest failed to generate. Check bot logs."
 
-    await send_message(group_id, summary)
+    await send_message(destination_chat_id, summary)
 
     async with session_factory() as session:
         for item in items:
@@ -75,4 +83,25 @@ async def run_daily_digest(
             if db_item:
                 db_item.digested = True
         await session.commit()
-    logger.info("Digest sent to group %s (%s items)", group_id, len(items))
+    logger.info(
+        "Digest sent to chat %s (%s items)", destination_chat_id, len(items)
+    )
+
+
+async def run_daily_digest(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    send_message: Callable[[int, str], Awaitable[None]],
+) -> None:
+    group_id = settings.digest_group_chat_id
+    if group_id is None:
+        logger.info("Digest skipped: DIGEST_GROUP_CHAT_ID not set")
+        return
+
+    await run_digest(
+        session_factory,
+        settings,
+        send_message,
+        group_id,
+        require_group_enabled=group_id,
+    )

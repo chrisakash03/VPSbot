@@ -17,7 +17,8 @@ async def cmd_start(message: Message) -> None:
         "• /list — your upcoming reminders\n"
         "• /cancel — remove a reminder\n\n"
         "In groups: @mention me with a reminder, or /r@BotName …\n"
-        "Digest: /digest on|off in the configured digest group (admin).\n\n"
+        "Digest: /digest on|off in the configured digest group (admin).\n"
+        "Admins: /digestnow — run the digest now in this chat.\n\n"
         "Admins (DM only): /addfeed, /removefeed, /listfeeds",
         parse_mode=None,
     )

@@ -37,6 +37,7 @@ Telegram bot for natural-language reminders, recurring schedules, RSS monitoring
    | `/removefeed <url\|id>` | Remove feed (admin) |
    | `/listfeeds` | List feeds (admin) |
    | `/digest on` / `/digest off` | Enable daily digest in the configured group (admin) |
+   | `/digestnow` | Run the digest pipeline now and send it here (admin) |
    | `/chatid` | Show this chat’s ID (admin; use for `DIGEST_GROUP_CHAT_ID`) |
 
 Static feeds can also be listed in `feeds.yaml` (merged on startup).
