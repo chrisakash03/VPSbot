@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from vpsbot.db.models import RecurrenceKind
+from vpsbot.reminders.bounds import apply_end_bound_from_text
 from vpsbot.reminders.parsing import _clean_message
 from vpsbot.reminders.schedule_spec import (
     EndKind,
@@ -156,6 +157,7 @@ def assemble_from_answers(
         "interval_days",
         "weekday_name",
         "end_kind",
+        "duration_days",
         "duration_weeks",
         "max_occurrences",
         "time_kind",
@@ -245,10 +247,18 @@ def assemble_from_answers(
         confidences.append(parts["end_kind"].confidence)
 
     if end_choice == "duration":
+        dd = parts["duration_days"].choice
         dw = parts["duration_weeks"].choice
+        if parts["duration_days"].confidence is not None:
+            confidences.append(parts["duration_days"].confidence)
         if parts["duration_weeks"].confidence is not None:
             confidences.append(parts["duration_weeks"].confidence)
-        if dw and dw.isdigit():
+        if dd and dd.isdigit():
+            end = ScheduleEnd(
+                kind=EndKind.DURATION_DAYS,
+                duration_days=int(dd),
+            )
+        elif dw and dw.isdigit():
             end = ScheduleEnd(
                 kind=EndKind.DURATION_DAYS,
                 duration_days=int(dw) * 7,
@@ -300,6 +310,10 @@ def assemble_from_answers(
 
     if end.kind == EndKind.DURATION_DAYS and end.duration_days:
         spec.end.until_utc = start_utc + timedelta(days=end.duration_days)
+
+    spec = apply_end_bound_from_text(user_text, spec)
+    if spec.end.kind == EndKind.DURATION_DAYS and spec.end.duration_days and not spec.end.until_utc:
+        spec.end.until_utc = start_utc + timedelta(days=spec.end.duration_days)
 
     errors = validate_schedule_spec(spec, now_utc)
     if errors:

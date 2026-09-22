@@ -40,6 +40,10 @@ def reminder_questions() -> dict:
     for n in range(2, 31):
         max_occ[str(n)] = None
 
+    duration_days_opts = {"none": absent, "other": "Another day count not in the list."}
+    for d in range(1, 31):
+        duration_days_opts[str(d)] = None
+
     duration_weeks = {"none": absent, "1": None, "2": None, "3": None, "4": None, "other": absent}
 
     hours = {"none": absent}
@@ -83,6 +87,10 @@ def reminder_questions() -> dict:
                 "max_occurrences": "A fixed number of times",
                 "unclear": "Cannot determine",
             },
+        ),
+        "duration_days": Choice(
+            instructions="If for a duration in days (e.g. for 3 days), how many days?",
+            criteria=duration_days_opts,
         ),
         "duration_weeks": Choice(
             instructions="If for a duration in weeks, how many weeks?",

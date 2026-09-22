@@ -11,6 +11,7 @@ import dateparser
 from dateparser.search import search_dates
 
 from vpsbot.db.models import RecurrenceKind
+from vpsbot.reminders.text_normalize import normalize_reminder_text, strip_schedule_duration_phrases
 from vpsbot.utils.timezone import to_utc
 
 RECURRENCE_PATTERNS: list[tuple[re.Pattern[str], RecurrenceKind, str]] = [
@@ -212,7 +213,7 @@ def _search_dates_filtered(text: str, settings: dict[str, Any]) -> list[tuple[st
 
 def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = None) -> datetime:
     settings = _dateparser_settings(tz_name, now_utc)
-    working = _strip_reminder_prefix(text)
+    working = strip_schedule_duration_phrases(_strip_reminder_prefix(text))
     matches = _search_dates_filtered(working, settings)
     token = _find_time_token(working)
     if token and _normalize_time_token(token):
@@ -252,7 +253,7 @@ def _clean_message(
     now_utc: datetime | None = None,
 ) -> str:
     settings = _dateparser_settings(tz_name, now_utc)
-    working = text
+    working = strip_schedule_duration_phrases(text)
     if recurrence_phrase:
         working = _strip_phrase(working, recurrence_phrase)
     matches = _search_dates_filtered(working, settings)
@@ -276,6 +277,7 @@ def _clean_message(
 def parse_reminder_text(text: str, tz_name: str, now_utc: datetime | None = None) -> ParsedReminder:
     """Parse free-text reminder input into message, UTC fire time, and recurrence."""
     now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
+    text = normalize_reminder_text(text)
     recurrence, phrase, remainder = _detect_recurrence(text)
     try:
         fire_at = _parse_anchor_datetime(remainder if phrase else text, tz_name, now_utc)

@@ -6,6 +6,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from vpsbot.config import Settings
+from vpsbot.reminders.bounds import apply_end_bound_from_text
+from vpsbot.reminders.text_normalize import normalize_reminder_text
 from vpsbot.reminders.jev.client import parse_with_jev
 from vpsbot.reminders.parsing import ParseError, parse_reminder_text
 from vpsbot.reminders.router import should_invoke_jev
@@ -45,12 +47,26 @@ def _apply_confidence_gate(spec: ScheduleSpec, settings: Settings) -> ScheduleSp
     return spec
 
 
+def _prepare_spec(
+    spec: ScheduleSpec,
+    text: str,
+    settings: Settings,
+    now_utc: datetime,
+) -> PipelineResult:
+    spec = apply_end_bound_from_text(text, spec)
+    errors = validate_schedule_spec(spec, now_utc)
+    if errors:
+        return PipelineResult(error="; ".join(errors))
+    return PipelineResult(spec=_apply_confidence_gate(spec, settings))
+
+
 async def parse_reminder_pipeline(
     text: str,
     settings: Settings,
     now_utc: datetime | None = None,
 ) -> PipelineResult:
     now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
+    text = normalize_reminder_text(text)
     fast_result = None
     fast_error: ParseError | None = None
 
@@ -63,15 +79,12 @@ async def parse_reminder_pipeline(
         if fast_result is None:
             return PipelineResult(error=str(fast_error) if fast_error else "Could not parse reminder.")
         spec = parsed_reminder_to_spec(fast_result, ParseSource.FAST)
-        errors = validate_schedule_spec(spec, now_utc)
-        if errors:
-            return PipelineResult(error="; ".join(errors))
-        return PipelineResult(spec=_apply_confidence_gate(spec, settings))
+        return _prepare_spec(spec, text, settings, now_utc)
 
     if not settings.jev_enabled:
         if fast_result is not None:
             spec = parsed_reminder_to_spec(fast_result, ParseSource.FAST)
-            return PipelineResult(spec=_apply_confidence_gate(spec, settings))
+            return _prepare_spec(spec, text, settings, now_utc)
         return PipelineResult(
             error=str(fast_error) if fast_error else "Could not parse. Enable Jev for complex schedules.",
         )
@@ -89,11 +102,12 @@ async def parse_reminder_pipeline(
         logger.exception("Jev parse failed: %s", exc)
         if fast_result is not None:
             spec = parsed_reminder_to_spec(fast_result, ParseSource.FAST)
-            return PipelineResult(spec=_apply_confidence_gate(spec, settings))
+            return _prepare_spec(spec, text, settings, now_utc)
         return PipelineResult(
             error="Couldn't interpret that schedule. Try simpler wording.",
         )
 
+    spec = apply_end_bound_from_text(text, spec)
     errors = validate_schedule_spec(spec, now_utc)
     if errors:
         spec.review = ReviewAction.CLARIFY
