@@ -12,7 +12,7 @@ from dateparser.search import search_dates
 
 from vpsbot.db.models import RecurrenceKind
 from vpsbot.reminders.text_normalize import normalize_reminder_text, strip_schedule_duration_phrases
-from vpsbot.utils.timezone import to_utc
+from vpsbot.utils.timezone import format_local, to_utc
 
 RECURRENCE_PATTERNS: list[tuple[re.Pattern[str], RecurrenceKind, str]] = [
     (re.compile(r"\bevery\s+day\b", re.I), RecurrenceKind.DAILY, "every day"),
@@ -205,6 +205,10 @@ def _matches_are_only_day_anchors(matches: list[tuple[str, datetime]]) -> bool:
     return bool(matches) and all(fragment.lower() in {"today", "tomorrow"} for fragment, _ in matches)
 
 
+def _utc_minute(dt: datetime, tz_name: str) -> datetime:
+    return to_utc(dt, tz_name).replace(second=0, microsecond=0)
+
+
 def _local_calendar_date(dt: datetime, tz_name: str) -> date:
     tz = ZoneInfo(tz_name)
     if dt.tzinfo is None:
@@ -219,16 +223,17 @@ def _should_prefer_time_token(
     now_utc: datetime,
 ) -> bool:
     """Prefer explicit am/pm token parse over a bad search_dates hit."""
-    anchored_utc = to_utc(anchored, tz_name)
-    match_utc = to_utc(match_dt, tz_name)
+    anchored_utc = _utc_minute(anchored, tz_name)
+    match_utc = _utc_minute(match_dt, tz_name)
+    now_cmp = _utc_minute(now_utc, "UTC")
     if _local_calendar_date(anchored, tz_name) == _local_calendar_date(match_dt, tz_name):
         return True
-    if anchored_utc > now_utc and match_utc <= now_utc:
+    if anchored_utc > now_cmp and match_utc <= now_cmp:
         # e.g. "10am today" parsed as the current clock time instead of 10:00.
         return True
     local_match = match_dt.astimezone(ZoneInfo(tz_name))
     if (
-        anchored_utc > now_utc
+        anchored_utc > now_cmp
         and local_match.hour == 0
         and local_match.minute == 0
         and (anchored.hour != 0 or anchored.minute != 0)
@@ -262,14 +267,15 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
                 now = now_utc or datetime.now(ZoneInfo("UTC"))
                 compact = token.replace(" ", "").lower()
                 frag_norm = frag.replace(" ", "").lower()
-                anchored_utc = to_utc(anchored, tz_name)
-                match_utc = to_utc(match_dt, tz_name)
+                anchored_utc = _utc_minute(anchored, tz_name)
+                match_utc = _utc_minute(match_dt, tz_name)
+                now_cmp = _utc_minute(now, "UTC")
                 if compact in frag_norm:
                     # e.g. "at 6pm on 23 september 2026" — keep the full calendar match, not today+time.
                     use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
-                elif anchored_utc > now:
+                elif anchored_utc > now_cmp:
                     # e.g. "11.00pm today" where search_dates only matched the "00pm" suffix as now.
-                    if match_utc <= now:
+                    if match_utc <= now_cmp:
                         use_token = True
                     else:
                         use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
@@ -332,8 +338,13 @@ def parse_reminder_text(text: str, tz_name: str, now_utc: datetime | None = None
     except ParseError:
         raise
     fire_at = fire_at.replace(second=0, microsecond=0)
-    if fire_at <= now_utc:
-        raise ParseError("That time is in the past. Please choose a future date and time.")
+    now_cmp = now_utc.replace(second=0, microsecond=0)
+    if fire_at <= now_cmp:
+        raise ParseError(
+            f"That time is in the past ({format_local(fire_at, tz_name)}; "
+            f"now is {format_local(now_utc, tz_name)} in {tz_name}). "
+            "Please choose a future date and time."
+        )
 
     message = _clean_message(text, tz_name, phrase, now_utc)
     rule: dict[str, Any] | None = None
