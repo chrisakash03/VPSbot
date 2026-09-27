@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -201,6 +201,39 @@ def _matches_are_only_day_anchors(matches: list[tuple[str, datetime]]) -> bool:
     return bool(matches) and all(fragment.lower() in {"today", "tomorrow"} for fragment, _ in matches)
 
 
+def _local_calendar_date(dt: datetime, tz_name: str) -> date:
+    tz = ZoneInfo(tz_name)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(tz).date()
+
+
+def _should_prefer_time_token(
+    anchored: datetime,
+    match_dt: datetime,
+    tz_name: str,
+    now_utc: datetime,
+) -> bool:
+    """Prefer explicit am/pm token parse over a bad search_dates hit."""
+    anchored_utc = to_utc(anchored, tz_name)
+    match_utc = to_utc(match_dt, tz_name)
+    if _local_calendar_date(anchored, tz_name) == _local_calendar_date(match_dt, tz_name):
+        return True
+    if anchored_utc > now_utc and match_utc <= now_utc:
+        # e.g. "10am today" parsed as the current clock time instead of 10:00.
+        return True
+    local_match = match_dt.astimezone(ZoneInfo(tz_name))
+    if (
+        anchored_utc > now_utc
+        and local_match.hour == 0
+        and local_match.minute == 0
+        and (anchored.hour != 0 or anchored.minute != 0)
+    ):
+        # e.g. "10am on 27 sept" -> 10 Sep 2027 00:00 from search_dates.
+        return True
+    return False
+
+
 def _search_dates_filtered(text: str, settings: dict[str, Any]) -> list[tuple[str, datetime]]:
     noise = {"me", "at", "on", "by", "to", "the", "a", "an"}
     matches = search_dates(text, settings=settings) or []
@@ -224,10 +257,9 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
                 frag, match_dt = matches[0]
                 compact = token.replace(" ", "").lower()
                 if compact in frag.replace(" ", "").lower():
-                    anchored_utc = to_utc(anchored, tz_name).date()
-                    match_utc = to_utc(match_dt, tz_name).date()
+                    now = now_utc or datetime.now(ZoneInfo("UTC"))
                     # e.g. "at 6pm on 23 september 2026" — keep the full calendar match, not today+time.
-                    use_token = anchored_utc == match_utc
+                    use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
             if use_token:
                 return to_utc(anchored, tz_name)
 

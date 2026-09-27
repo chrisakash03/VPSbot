@@ -31,6 +31,27 @@ def test_parse_today_before_time():
     assert local.hour == 12 and local.minute == 50
 
 
+def test_parse_same_day_morning_from_early_morning():
+    # 02:41 SGT = 18:41 UTC previous calendar day in UTC; must still resolve 10:00 same local day.
+    now = datetime(2026, 9, 26, 18, 41, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text("10am today schedule dm1", "Asia/Singapore", now_utc=now)
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert local.year == 2026 and local.month == 9 and local.day == 27
+    assert local.hour == 10 and local.minute == 0
+
+
+def test_parse_day_month_with_time_not_swapped():
+    now = datetime(2026, 9, 26, 18, 41, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "10am on 27 sept schedule dm1 b2 messages",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert local.year == 2026 and local.month == 9 and local.day == 27
+    assert local.hour == 10 and local.minute == 0
+
+
 def test_parse_compact_time_with_today():
     now = datetime(2026, 9, 22, 4, 48, tzinfo=ZoneInfo("UTC"))
     parsed = parse_reminder_text(
