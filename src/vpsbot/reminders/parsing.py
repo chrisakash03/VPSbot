@@ -201,10 +201,6 @@ def _parse_time_with_anchor(
     return None
 
 
-def _matches_are_only_day_anchors(matches: list[tuple[str, datetime]]) -> bool:
-    return bool(matches) and all(fragment.lower() in {"today", "tomorrow"} for fragment, _ in matches)
-
-
 def _utc_minute(dt: datetime, tz_name: str) -> datetime:
     return to_utc(dt, tz_name).replace(second=0, microsecond=0)
 
@@ -216,31 +212,39 @@ def _local_calendar_date(dt: datetime, tz_name: str) -> date:
     return dt.astimezone(tz).date()
 
 
-def _should_prefer_time_token(
+def _should_use_calendar_match_over_token(
+    matches: list[tuple[str, datetime]],
     anchored: datetime,
-    match_dt: datetime,
+    working: str,
     tz_name: str,
     now_utc: datetime,
 ) -> bool:
-    """Prefer explicit am/pm token parse over a bad search_dates hit."""
-    anchored_utc = _utc_minute(anchored, tz_name)
-    match_utc = _utc_minute(match_dt, tz_name)
+    """Keep a full calendar date from search_dates instead of today+time from the token."""
+    if len(matches) != 1:
+        return len(matches) > 1
+    frag, match_dt = matches[0]
+    token = _find_time_token(working)
+    if not token:
+        return False
+    compact = token.replace(" ", "").lower()
+    frag_norm = frag.replace(" ", "").lower()
+    if compact not in frag_norm:
+        return False
     now_cmp = _utc_minute(now_utc, "UTC")
+    match_utc = _utc_minute(match_dt, tz_name)
+    if match_utc <= now_cmp:
+        return False
     if _local_calendar_date(anchored, tz_name) == _local_calendar_date(match_dt, tz_name):
-        return True
-    if anchored_utc > now_cmp and match_utc <= now_cmp:
-        # e.g. "10am today" parsed as the current clock time instead of 10:00.
-        return True
+        return False
     local_match = match_dt.astimezone(ZoneInfo(tz_name))
     if (
-        anchored_utc > now_cmp
-        and local_match.hour == 0
+        local_match.hour == 0
         and local_match.minute == 0
         and (anchored.hour != 0 or anchored.minute != 0)
     ):
         # e.g. "10am on 27 sept" -> 10 Sep 2027 00:00 from search_dates.
-        return True
-    return False
+        return False
+    return True
 
 
 def _search_dates_filtered(text: str, settings: dict[str, Any]) -> list[tuple[str, datetime]]:
@@ -261,25 +265,12 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
     if token and _normalize_time_token(token):
         anchored = _parse_time_with_anchor(token, working, tz_name, now_utc)
         if anchored is not None:
-            use_token = not matches or _matches_are_only_day_anchors(matches)
-            if not use_token and len(matches) == 1:
-                frag, match_dt = matches[0]
-                now = now_utc or datetime.now(ZoneInfo("UTC"))
-                compact = token.replace(" ", "").lower()
-                frag_norm = frag.replace(" ", "").lower()
-                anchored_utc = _utc_minute(anchored, tz_name)
-                match_utc = _utc_minute(match_dt, tz_name)
-                now_cmp = _utc_minute(now, "UTC")
-                if compact in frag_norm:
-                    # e.g. "at 6pm on 23 september 2026" — keep the full calendar match, not today+time.
-                    use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
-                elif anchored_utc > now_cmp:
-                    # e.g. "11.00pm today" where search_dates only matched the "00pm" suffix as now.
-                    if match_utc <= now_cmp:
-                        use_token = True
-                    else:
-                        use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
-            if use_token:
+            now = now_utc or datetime.now(ZoneInfo("UTC"))
+            anchored_utc = _utc_minute(anchored, tz_name)
+            now_cmp = _utc_minute(now, "UTC")
+            if anchored_utc > now_cmp and not _should_use_calendar_match_over_token(
+                matches, anchored, working, tz_name, now
+            ):
                 return to_utc(anchored, tz_name)
 
     if not matches:
