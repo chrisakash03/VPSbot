@@ -71,9 +71,9 @@ RECURRENCE_PATTERNS: list[tuple[re.Pattern[str], RecurrenceKind, str]] = [
     ),
 ]
 
-# Times like 12:48pm, 1250pm, 9 am (dateparser.search often misses these).
+# Times like 12:48pm, 1250pm, 11.00pm, 9 am (dateparser.search often misses these).
 _TIME_TOKEN = re.compile(
-    r"\b(?P<t>(?:\d{1,2}:\d{2}|\d{3,4}|\d{1,2})\s*(?:a\.?m\.?|p\.?m\.?))\b",
+    r"\b(?P<t>(?:\d{1,2}:\d{2}|\d{1,2}\.\d{2}|\d{3,4}|\d{1,2})\s*(?:a\.?m\.?|p\.?m\.?))\b",
     re.I,
 )
 _DAY_ANCHOR = re.compile(r"\b(today|tomorrow)\b", re.I)
@@ -143,10 +143,14 @@ def _strip_reminder_prefix(text: str) -> str:
 
 
 def _find_time_token(text: str) -> str | None:
-    match = _TIME_TOKEN.search(text)
-    if not match:
-        return None
-    return match.group("t")
+    best: str | None = None
+    for match in _TIME_TOKEN.finditer(text):
+        token = match.group("t")
+        if not _normalize_time_token(token):
+            continue
+        if best is None or len(token) > len(best):
+            best = token
+    return best
 
 
 def _normalize_time_token(token: str) -> str | None:
@@ -255,11 +259,20 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
             use_token = not matches or _matches_are_only_day_anchors(matches)
             if not use_token and len(matches) == 1:
                 frag, match_dt = matches[0]
+                now = now_utc or datetime.now(ZoneInfo("UTC"))
                 compact = token.replace(" ", "").lower()
-                if compact in frag.replace(" ", "").lower():
-                    now = now_utc or datetime.now(ZoneInfo("UTC"))
+                frag_norm = frag.replace(" ", "").lower()
+                anchored_utc = to_utc(anchored, tz_name)
+                match_utc = to_utc(match_dt, tz_name)
+                if compact in frag_norm:
                     # e.g. "at 6pm on 23 september 2026" — keep the full calendar match, not today+time.
                     use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
+                elif anchored_utc > now:
+                    # e.g. "11.00pm today" where search_dates only matched the "00pm" suffix as now.
+                    if match_utc <= now:
+                        use_token = True
+                    else:
+                        use_token = _should_prefer_time_token(anchored, match_dt, tz_name, now)
             if use_token:
                 return to_utc(anchored, tz_name)
 

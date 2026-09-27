@@ -40,6 +40,13 @@ def test_parse_same_day_morning_from_early_morning():
     assert local.hour == 10 and local.minute == 0
 
 
+def test_parse_dotted_time_today():
+    now = datetime(2026, 9, 27, 13, 26, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text("11.00pm today", "Asia/Singapore", now_utc=now)
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert local.hour == 23 and local.minute == 0
+
+
 def test_parse_day_month_with_time_not_swapped():
     now = datetime(2026, 9, 26, 18, 41, tzinfo=ZoneInfo("UTC"))
     parsed = parse_reminder_text(
