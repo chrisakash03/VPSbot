@@ -20,6 +20,7 @@ For each batch of RSS items:
 - Group articles covering the same underlying event into one story.
 - Prefer primary sources, official announcements, research papers, and reputable reporting when multiple sources discuss the same event.
 - Do not invent details that are absent from the supplied articles.
+- A non-empty Excerpt line is part of the supplied article.
 - If evidence for a claim is weak, conflicting, or based mainly on speculation, explicitly say so.
 - Ignore low-information stories unless they contain a meaningful new development.
 - Prioritize developments involving:
@@ -88,6 +89,7 @@ class DigestItem:
     feed_title: str
     title: str
     link: str
+    excerpt: str = ""
 
 
 def _build_prompt(items: list[DigestItem], *, digest_date: str) -> str:
@@ -95,7 +97,10 @@ def _build_prompt(items: list[DigestItem], *, digest_date: str) -> str:
     for item in items:
         feed = item.feed_title or "Feed"
         link = item.link.strip() if item.link else "(no link provided)"
-        lines.append(f"- Feed: {feed}\n  Title: {item.title}\n  Link: {link}")
+        excerpt = item.excerpt.strip() if item.excerpt else "(none)"
+        lines.append(
+            f"- Feed: {feed}\n  Title: {item.title}\n  Link: {link}\n  Excerpt: {excerpt}"
+        )
     body = "\n".join(lines)
     return (
         f"Use this date in the header: {digest_date}\n\n"

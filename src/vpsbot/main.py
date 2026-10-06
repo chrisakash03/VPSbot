@@ -76,6 +76,7 @@ async def main() -> None:
     await catch_up_overdue_reminders(session_factory, bot, scheduler)
     await scheduler.reload_reminders_from_db()
     scheduler.schedule_rss_poll()
+    scheduler.schedule_digest_enrich()
     scheduler.schedule_daily_digest()
 
     logger.info("Starting long polling")

@@ -69,6 +69,7 @@ async def poll_all_feeds(session_factory: async_sessionmaker[AsyncSession]) -> N
                         guid=entry.guid,
                         link=entry.link,
                         title=entry.title,
+                        summary=entry.summary or None,
                         published_at=entry.published_at,
                         collected_at=now,
                         digested=False,

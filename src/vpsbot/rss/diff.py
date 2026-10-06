@@ -11,6 +11,7 @@ class FeedEntry:
     link: str
     title: str
     published_at: datetime | None
+    summary: str = ""
 
 
 def entry_identity(entry: dict[str, Any]) -> str:

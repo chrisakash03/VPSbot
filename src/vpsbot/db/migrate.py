@@ -28,3 +28,17 @@ def run_sqlite_migrations(connection: Connection) -> None:
                     "WHERE notify_chat_id IS NULL"
                 )
             )
+
+    if inspector.has_table("rss_queue"):
+        cols = {c["name"] for c in inspector.get_columns("rss_queue")}
+        if "summary" not in cols:
+            connection.execute(text("ALTER TABLE rss_queue ADD COLUMN summary TEXT"))
+        if "excerpt" not in cols:
+            connection.execute(text("ALTER TABLE rss_queue ADD COLUMN excerpt TEXT"))
+        if "excerpt_status" not in cols:
+            connection.execute(
+                text(
+                    "ALTER TABLE rss_queue ADD COLUMN excerpt_status VARCHAR(16) "
+                    "DEFAULT 'pending'"
+                )
+            )

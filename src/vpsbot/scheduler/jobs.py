@@ -8,6 +8,7 @@ from vpsbot.app_state import get_state
 from vpsbot.db.models import Reminder
 from vpsbot.reminders.delivery import deliver_reminder
 from vpsbot.rss.digest_runner import run_daily_digest
+from vpsbot.rss.enrich import enrich_pending, upcoming_digest
 from vpsbot.rss.poller import poll_all_feeds
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,17 @@ async def fire_reminder_job(reminder_id: int) -> None:
 async def rss_poll_job() -> None:
     state = get_state()
     await poll_all_feeds(state.session_factory)
+
+
+async def digest_enrich_job() -> None:
+    state = get_state()
+    tz = ZoneInfo(state.settings.timezone)
+    deadline = upcoming_digest(datetime.now(tz), state.settings.digest_time)
+    await enrich_pending(
+        state.session_factory,
+        deadline=deadline,
+        tz_name=state.settings.timezone,
+    )
 
 
 async def daily_digest_job() -> None:

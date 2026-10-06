@@ -59,6 +59,12 @@ class Feed(Base):
     last_seen_published: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
+class ExcerptStatus(StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class RssQueueItem(Base):
     __tablename__ = "rss_queue"
 
@@ -67,6 +73,11 @@ class RssQueueItem(Base):
     guid: Mapped[str] = mapped_column(String(512))
     link: Mapped[str] = mapped_column(String(2048))
     title: Mapped[str] = mapped_column(String(1024))
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    excerpt_status: Mapped[str] = mapped_column(
+        String(16), default=ExcerptStatus.PENDING.value
+    )
     published_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
     digested: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

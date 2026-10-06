@@ -124,6 +124,23 @@ class BotScheduler:
         )
         logger.info("RSS poll scheduled every %s minutes", minutes)
 
+    def schedule_digest_enrich(self) -> None:
+        hour, minute = enrich_clock(self.settings.digest_time)
+        tz = ZoneInfo(self.settings.timezone)
+        self.scheduler.add_job(
+            jobs.digest_enrich_job,
+            trigger=CronTrigger(hour=hour, minute=minute, timezone=tz),
+            id="digest_enrich",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "Digest excerpt enrichment scheduled at %02d:%02d %s",
+            hour,
+            minute,
+            self.settings.timezone,
+        )
+
     def schedule_daily_digest(self) -> None:
         hour, minute = self._parse_hhmm(self.settings.digest_time)
         tz = ZoneInfo(self.settings.timezone)
@@ -142,7 +159,17 @@ class BotScheduler:
 
     @staticmethod
     def _parse_hhmm(value: str) -> tuple[int, int]:
-        parts = value.strip().split(":")
-        if len(parts) != 2:
-            raise ValueError("DIGEST_TIME must be HH:MM")
-        return int(parts[0]), int(parts[1])
+        return parse_hhmm(value)
+
+
+def parse_hhmm(value: str) -> tuple[int, int]:
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        raise ValueError("DIGEST_TIME must be HH:MM")
+    return int(parts[0]), int(parts[1])
+
+
+def enrich_clock(digest_time: str) -> tuple[int, int]:
+    hour, minute = parse_hhmm(digest_time)
+    total = (hour * 60 + minute - 30) % (24 * 60)
+    return divmod(total, 60)

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from vpsbot.config import Settings
-from vpsbot.db.models import RssQueueItem
+from vpsbot.db.models import ExcerptStatus, RssQueueItem
 from vpsbot.llm.digest import DigestItem, summarize_digest
 from vpsbot.rss.digest_group import any_digest_group_enabled
 
@@ -61,6 +61,11 @@ async def run_digest(
             feed_title=item.feed.title or item.feed.url,
             title=item.title,
             link=item.link,
+            excerpt=(
+                item.excerpt or ""
+                if item.excerpt_status == ExcerptStatus.READY.value
+                else ""
+            ),
         )
         for item in items
     ]
