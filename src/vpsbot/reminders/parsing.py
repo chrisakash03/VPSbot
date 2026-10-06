@@ -101,6 +101,14 @@ class ParseError(Exception):
     pass
 
 
+# "now" is the current instant. It shows up in reminder text ("can do now")
+# and should not be a second fire time.
+_NOW_FRAGMENT = re.compile(r"^now(?:\s*\+)?$", re.I)
+# "to" after a clock time is an infinitive ("5pm to ask"). Other languages
+# read "to" as a weekday, which drops the real day word such as "friday".
+_INFINITIVE_TO_AFTER_TIME = re.compile(r"((?:a|p)\.?m\.?)\s+to\b", re.I)
+
+
 def _dateparser_settings(tz_name: str, now_utc: datetime | None = None) -> dict[str, Any]:
     base = (now_utc or datetime.now(ZoneInfo("UTC"))).astimezone(ZoneInfo(tz_name))
     return {
@@ -109,6 +117,11 @@ def _dateparser_settings(tz_name: str, now_utc: datetime | None = None) -> dict[
         "PREFER_DATES_FROM": "future",
         "RELATIVE_BASE": base,
     }
+
+
+def _text_for_date_search(text: str) -> str:
+    text = _INFINITIVE_TO_AFTER_TIME.sub(r"\1", text)
+    return re.sub(r"\bnow\b", " ", text, flags=re.I)
 
 
 def _strip_phrase(text: str, phrase: str) -> str:
@@ -176,11 +189,31 @@ def _normalize_time_token(token: str) -> str | None:
     return None
 
 
-def _day_anchor_in_text(text: str) -> str:
+def _explicit_day_anchor(text: str) -> str | None:
     match = _DAY_ANCHOR.search(text)
     if not match:
-        return "today"
+        return None
     return match.group(1).lower()
+
+
+def _day_anchor_in_text(text: str) -> str:
+    return _explicit_day_anchor(text) or "today"
+
+
+_CLOCK_FILLER = re.compile(r"\b(?:at|on|by|around|the|a|an)\b", re.I)
+
+
+def _fragment_is_clock_only(fragment: str, token: str) -> bool:
+    """True when search_dates latched onto the clock token and nothing else."""
+    rest = re.sub(re.escape(token), " ", fragment, count=1, flags=re.I)
+    rest = _CLOCK_FILLER.sub(" ", rest)
+    return rest.strip(" .,:;-") == ""
+
+
+def _matches_are_clock_only(matches: list[tuple[str, datetime]], token: str) -> bool:
+    if not matches:
+        return True
+    return all(_fragment_is_clock_only(fragment, token) for fragment, _ in matches)
 
 
 def _parse_time_with_anchor(
@@ -249,11 +282,13 @@ def _should_use_calendar_match_over_token(
 
 def _search_dates_filtered(text: str, settings: dict[str, Any]) -> list[tuple[str, datetime]]:
     noise = {"me", "at", "on", "by", "to", "the", "a", "an"}
-    matches = search_dates(text, settings=settings) or []
+    matches = search_dates(_text_for_date_search(text), settings=settings) or []
     return [
         (fragment, dt)
         for fragment, dt in matches
-        if fragment.lower() not in noise and len(fragment.strip()) >= 3
+        if fragment.lower() not in noise
+        and len(fragment.strip()) >= 3
+        and _NOW_FRAGMENT.match(fragment.strip()) is None
     ]
 
 
@@ -268,8 +303,24 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
             now = now_utc or datetime.now(ZoneInfo("UTC"))
             anchored_utc = _utc_minute(anchored, tz_name)
             now_cmp = _utc_minute(now, "UTC")
-            if anchored_utc > now_cmp and not _should_use_calendar_match_over_token(
+            use_calendar = _should_use_calendar_match_over_token(
                 matches, anchored, working, tz_name, now
+            )
+            if anchored_utc > now_cmp and not use_calendar:
+                return to_utc(anchored, tz_name)
+            # "at 1am" with no calendar date: search_dates reads "1" as January
+            # and midnight. Keep the clock time instead (next day if today passed).
+            if (
+                anchored_utc <= now_cmp
+                and not use_calendar
+                and _explicit_day_anchor(working) is None
+                and _matches_are_clock_only(matches, token)
+            ):
+                return to_utc(anchored + timedelta(days=1), tz_name)
+            if (
+                anchored_utc <= now_cmp
+                and _explicit_day_anchor(working) == "today"
+                and _matches_are_clock_only(matches, token)
             ):
                 return to_utc(anchored, tz_name)
 

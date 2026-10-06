@@ -11,12 +11,15 @@ _AMPM_TRAILING_PERIOD = re.compile(
     r"\b(\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?))\s*\.(?=\s|$)",
     re.I,
 )
+# dateparser does not treat these as "tomorrow", so "tmr at 1am" never anchors.
+_TOMORROW_SLANG = re.compile(r"\b(?:tmr|tmrw|tmw|tomorow|tommorow|tommorrow)\b", re.I)
 
 
 def normalize_reminder_text(text: str) -> str:
     """Normalize common phrasing before fast parse or Jev."""
     text = re.sub(r"^(?:/r(?:@[\w]+)?\s+)+", "", text.strip(), flags=re.I)
     text = re.sub(r"\beveryday\b", "every day", text, flags=re.I)
+    text = _TOMORROW_SLANG.sub("tomorrow", text)
     # "11pm. today" breaks dateparser; the period splits time from "today".
     return _AMPM_TRAILING_PERIOD.sub(r"\1", text)
 

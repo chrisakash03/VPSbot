@@ -101,6 +101,85 @@ def test_parse_absolute_date_with_time():
     assert "collect parcel" in parsed.message.lower()
 
 
+def test_parse_tmr_at_1am_not_next_january():
+    # 00:04 on 5 Oct in UTC+8 is still 4 Oct in UTC. search_dates turns "at 1am"
+    # into 4 Jan next year at midnight when "tmr" is not recognized.
+    now = datetime(2026, 10, 4, 16, 4, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "moisturise hands before sleeping tmr at 1am",
+        "UTC",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("UTC"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        5,
+        1,
+        0,
+    )
+    assert parsed.message == "moisturise hands before sleeping"
+
+
+def test_parse_tmr_at_1am_singapore():
+    now = datetime(2026, 10, 4, 16, 4, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "moisturise hands before sleeping tmr at 1am",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        6,
+        1,
+        0,
+    )
+    assert parsed.message == "moisturise hands before sleeping"
+
+
+def test_clock_only_past_time_rolls_forward_not_january():
+    now = datetime(2026, 10, 4, 16, 4, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text("moisturise hands at 1am", "UTC", now_utc=now)
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("UTC"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        5,
+        1,
+        0,
+    )
+
+
+def test_friday_5pm_ignores_now_in_the_task():
+    now = datetime(2026, 10, 5, 15, 36, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "remind me on friday 5pm to ask physio what sports i can do now "
+        "+ whether i can do things like theme park rides HAHAH",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        9,
+        17,
+        0,
+    )
+    assert local.strftime("%A") == "Friday"
+    assert "now" in parsed.message
+    assert "friday" not in parsed.message.lower()
+    assert "physio" in parsed.message
+
+
+def test_explicit_today_past_clock_stays_rejected():
+    now = datetime(2026, 10, 4, 16, 4, tzinfo=ZoneInfo("UTC"))
+    with pytest.raises(ParseError, match="in the past"):
+        parse_reminder_text("today at 1am", "UTC", now_utc=now)
+
+
 def test_parse_daily_recurrence():
     now = datetime(2026, 1, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
     parsed = parse_reminder_text("every day at 8am drink water", "UTC", now_utc=now)
