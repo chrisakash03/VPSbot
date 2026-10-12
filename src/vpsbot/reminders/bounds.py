@@ -49,8 +49,12 @@ def fast_bounded_spec_if_complete(
 
 
 def apply_end_bound_from_text(text: str, spec: ScheduleSpec) -> ScheduleSpec:
-    """Fill recurrence end bounds from phrases like 'for 3 days' when not already set."""
-    if spec.recurrence == RecurrenceKind.NONE or spec.end.kind != EndKind.NONE:
+    """Fill recurrence end bounds from phrases like 'for 3 days'.
+
+    An explicit bound in the text replaces an end that was already chosen, so a
+    misread duration cannot hide 'for 6 weeks'.
+    """
+    if spec.recurrence == RecurrenceKind.NONE or not has_schedule_bound_phrase(text):
         return spec
 
     m_times = TIMES_RE.search(text)

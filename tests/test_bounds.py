@@ -10,7 +10,7 @@ from vpsbot.reminders.bounds import apply_end_bound_from_text
 from vpsbot.reminders.text_normalize import normalize_reminder_text
 from vpsbot.reminders.parsing import parse_reminder_text
 from vpsbot.reminders.pipeline import parse_reminder_pipeline
-from vpsbot.reminders.schedule_spec import EndKind, ScheduleSpec
+from vpsbot.reminders.schedule_spec import EndKind, ReviewAction, ScheduleSpec
 
 
 def _settings(**kwargs) -> Settings:
@@ -77,3 +77,35 @@ async def test_pipeline_fast_daily_for_three_days_without_jev():
     assert result.spec.end.kind == EndKind.MAX_OCCURRENCES
     assert result.spec.end.remaining_occurrences == 3
     assert result.spec.message == "do survey"
+
+
+@pytest.mark.asyncio
+async def test_every_7_days_for_6_weeks_skips_jev():
+    # 16:07 in Asia/Singapore, so 8pm the same evening is still ahead.
+    now = datetime(2026, 10, 12, 8, 7, tzinfo=ZoneInfo("UTC"))
+    text = (
+        "every 7 days at 8pm for 6 weeks - "
+        "check if vienna -> prague train tickets are open n book"
+    )
+    result = await parse_reminder_pipeline(
+        text,
+        _settings(timezone="Asia/Singapore", jev_enabled=True),
+        now_utc=now,
+    )
+    assert result.error is None
+    assert result.spec is not None
+    assert result.spec.review == ReviewAction.AUTO
+    assert result.spec.recurrence == RecurrenceKind.INTERVAL
+    assert result.spec.interval_days == 7
+    assert result.spec.end.duration_days == 42
+    assert result.spec.message == (
+        "check if vienna -> prague train tickets are open n book"
+    )
+    local = result.spec.start_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        12,
+        20,
+        0,
+    )

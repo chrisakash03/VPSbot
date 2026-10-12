@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -10,7 +13,7 @@ from vpsbot.db.models import RecurrenceKind
 from vpsbot.reminders.formatting import format_schedule_preview, format_schedule_summary
 from vpsbot.reminders.pending import delete_pending, get_pending, save_pending
 from vpsbot.reminders.pipeline import parse_reminder_pipeline
-from vpsbot.reminders.schedule_spec import ReviewAction
+from vpsbot.reminders.schedule_spec import ReviewAction, ScheduleEnd, validate_schedule_spec
 from vpsbot.reminders.service import (
     cancel_reminder,
     create_reminder_from_spec,
@@ -122,12 +125,13 @@ async def process_reminder_request(
 
     buttons = []
     if result.clarify_options:
-        for label in result.clarify_options[:3]:
+        for encoded in result.clarify_options[:3]:
+            label, _, code = encoded.partition("|")
             buttons.append(
                 [
                     InlineKeyboardButton(
                         text=label,
-                        callback_data=f"reminder:clarify:{pending.id}",
+                        callback_data=f"reminder:clarify:{pending.id}:{code or 'rephrase'}",
                     )
                 ]
             )
@@ -199,14 +203,71 @@ async def on_reminder_cancel_pending(query: CallbackQuery, ctx: BotContext) -> N
         await query.message.edit_text("Reminder not scheduled.")
 
 
+def _clarify_code_known(code: str) -> bool:
+    if code in ("once", "daily"):
+        return True
+    return code.startswith("i") and code[1:].isdigit()
+
+
+def _apply_clarify_choice(spec, code: str) -> None:
+    if code == "once":
+        spec.recurrence = RecurrenceKind.NONE
+        spec.interval_days = None
+        spec.end = ScheduleEnd()
+        return
+    if code == "daily":
+        spec.recurrence = RecurrenceKind.DAILY
+        spec.interval_days = None
+        return
+    spec.recurrence = RecurrenceKind.INTERVAL
+    spec.interval_days = int(code[1:])
+
+
 @router.callback_query(F.data.startswith("reminder:clarify:"))
 async def on_reminder_clarify(query: CallbackQuery, ctx: BotContext) -> None:
-    await query.answer()
-    if query.message:
+    if not query.data or not query.from_user or not query.message:
+        return
+    parts = query.data.split(":")
+    pending_id = int(parts[2])
+    code = parts[3] if len(parts) > 3 else ""
+    if not _clarify_code_known(code):
+        await query.answer()
         await query.message.edit_text(
             "Try rephrasing with one clear time, e.g.\n"
             "/r every 2 days at 8pm for 2 weeks — submit the report"
         )
+        return
+
+    async with ctx.session_factory() as session:
+        pending_data = await get_pending(session, pending_id, query.from_user.id)
+        if not pending_data:
+            await query.answer("Expired or not found.", show_alert=True)
+            return
+        spec, notify_chat_id = pending_data
+        _apply_clarify_choice(spec, code)
+        spec.review = ReviewAction.AUTO
+        errors = validate_schedule_spec(spec, datetime.now(ZoneInfo("UTC")))
+        if errors:
+            await query.answer("; ".join(errors), show_alert=True)
+            return
+        deliver_via_pm = notify_chat_id == query.from_user.id
+        reminder = await create_reminder_from_spec(
+            session,
+            user_id=query.from_user.id,
+            chat_id=query.message.chat.id,
+            notify_chat_id=notify_chat_id,
+            spec=spec,
+        )
+        await delete_pending(session, pending_id, query.from_user.id)
+    await ctx.scheduler.schedule_reminder(reminder)
+    await query.answer("Scheduled.")
+    await query.message.edit_text(
+        format_schedule_summary(
+            spec,
+            ctx.settings.timezone,
+            deliver_via_pm=deliver_via_pm,
+        )
+    )
 
 
 @router.message(Command("list"))

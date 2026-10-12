@@ -79,3 +79,47 @@ def test_assemble_daily_for_three_days_from_text_fallback():
     assert spec.end.kind == EndKind.MAX_OCCURRENCES
     assert spec.end.remaining_occurrences == 3
     assert "survey" in spec.message.lower()
+
+
+def test_assemble_every_7_days_ignores_bad_jev_date_and_duration():
+    now = datetime(2026, 10, 12, 8, 7, tzinfo=ZoneInfo("UTC"))
+    answers = {
+        "is_recurring": FakeAnswer(noul=0.8, confidence=0.7),
+        "schedule_kind": FakeAnswer(choice="weekly", confidence=0.7),
+        "interval_days": FakeAnswer(choice="none", confidence=0.7),
+        "weekday_name": FakeAnswer(choice="Monday", confidence=0.7),
+        "end_kind": FakeAnswer(choice="duration", confidence=0.7),
+        "duration_days": FakeAnswer(choice="7", confidence=0.7),
+        "duration_weeks": FakeAnswer(choice="none", confidence=0.7),
+        "max_occurrences": FakeAnswer(choice="none", confidence=0.7),
+        "time_kind": FakeAnswer(choice="specific_time", confidence=0.9),
+        "hour_local": FakeAnswer(choice="20", confidence=0.9),
+        "minute_local": FakeAnswer(choice="0", confidence=0.9),
+        "date_mode": FakeAnswer(choice="none", confidence=0.8),
+        "date_month": FakeAnswer(choice="none", confidence=0.8),
+        "date_day": FakeAnswer(choice="none", confidence=0.8),
+        "date_year": FakeAnswer(choice="none", confidence=0.8),
+        "date_day_anchor": FakeAnswer(choice="none", confidence=0.8),
+        "date_weekday": FakeAnswer(choice="none", confidence=0.8),
+        "date_week_offset": FakeAnswer(choice="none", confidence=0.8),
+    }
+    text = (
+        "every 7 days at 8pm for 6 weeks - "
+        "check if vienna -> prague train tickets are open n book"
+    )
+    spec = assemble_from_answers(
+        answers,
+        user_text=text,
+        tz_name="Asia/Singapore",
+        now_utc=now,
+        fallback_start_utc=datetime(2026, 10, 19, 12, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    assert spec.recurrence == RecurrenceKind.INTERVAL
+    assert spec.interval_days == 7
+    assert spec.end.duration_days == 42
+    assert spec.review != ReviewAction.CLARIFY
+    assert spec.review_reason != "no date stated"
+    assert "prague" in spec.message
+    assert not spec.message.startswith("every")
+    local = spec.start_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert (local.year, local.month, local.day, local.hour) == (2026, 10, 12, 20)

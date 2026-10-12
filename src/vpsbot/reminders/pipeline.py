@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from vpsbot.config import Settings
 from vpsbot.reminders.bounds import apply_end_bound_from_text, fast_bounded_spec_if_complete
-from vpsbot.reminders.text_normalize import normalize_reminder_text
+from vpsbot.reminders.text_normalize import interval_days_from_text, normalize_reminder_text
 from vpsbot.reminders.jev.client import parse_with_jev
 from vpsbot.reminders.parsing import ParseError, parse_reminder_text
 from vpsbot.reminders.router import should_invoke_jev
@@ -121,5 +121,17 @@ async def parse_reminder_pipeline(
     spec = _apply_confidence_gate(spec, settings)
     options = None
     if spec.review == ReviewAction.CLARIFY:
-        options = ["One-time only", "Every day", "Every N days"]
+        options = clarify_option_codes(text)
     return PipelineResult(spec=spec, clarify_options=options)
+
+
+def clarify_option_codes(text: str) -> list[str]:
+    """Button labels encoded as 'Label|code' so a tap can apply that choice."""
+    options: list[str] = []
+    found = interval_days_from_text(text)
+    if found is not None:
+        n = found[0]
+        options.append(f"Every {n} days|i{n}")
+    options.append("One-time only|once")
+    options.append("Every day|daily")
+    return options[:3]

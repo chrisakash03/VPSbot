@@ -44,7 +44,9 @@ def reminder_questions() -> dict:
     for d in range(1, 31):
         duration_days_opts[str(d)] = None
 
-    duration_weeks = {"none": absent, "1": None, "2": None, "3": None, "4": None, "other": absent}
+    duration_weeks = {"none": absent, "other": "Another week count not in the list."}
+    for w in range(1, 13):
+        duration_weeks[str(w)] = None
 
     hours = {"none": absent}
     for h in range(24):

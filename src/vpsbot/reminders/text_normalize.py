@@ -5,6 +5,16 @@ import re
 FOR_DAYS_RE = re.compile(r"\bfor\s+(?:the\s+next\s+)?(\d+)\s+days?\b", re.I)
 FOR_WEEKS_RE = re.compile(r"\bfor\s+(?:the\s+next\s+)?(\d+)\s+weeks?\b", re.I)
 TIMES_RE = re.compile(r"\b(\d+)\s+times\b", re.I)
+EVERY_N_DAYS_RE = re.compile(r"\bevery\s+(\d+)\s+days?\b", re.I)
+EVERY_OTHER_DAY_RE = re.compile(r"\bevery\s+other\s+day\b", re.I)
+_EXPLICIT_START_DATE_RE = re.compile(
+    r"\b(?:today|tomorrow|tmr|tmrw|tmw|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+    re.I,
+)
+_NUMERIC_DATE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b")
 
 
 _AMPM_TRAILING_PERIOD = re.compile(
@@ -26,6 +36,24 @@ def normalize_reminder_text(text: str) -> str:
 
 def has_schedule_bound_phrase(text: str) -> bool:
     return bool(FOR_DAYS_RE.search(text) or FOR_WEEKS_RE.search(text) or TIMES_RE.search(text))
+
+
+def interval_days_from_text(text: str) -> tuple[int, str] | None:
+    """Return (N, matched phrase) for 'every N days' or 'every other day'."""
+    match = EVERY_N_DAYS_RE.search(text)
+    if match:
+        n = int(match.group(1))
+        if n >= 1:
+            return n, match.group(0)
+    match = EVERY_OTHER_DAY_RE.search(text)
+    if match:
+        return 2, match.group(0)
+    return None
+
+
+def has_explicit_start_date(text: str) -> bool:
+    """True when the text names a day, not only a repeat interval or a clock time."""
+    return bool(_EXPLICIT_START_DATE_RE.search(text) or _NUMERIC_DATE_RE.search(text))
 
 
 def strip_schedule_duration_phrases(text: str) -> str:

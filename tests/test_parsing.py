@@ -88,6 +88,26 @@ def test_parse_time_only_today():
     assert local.hour == 12 and local.minute == 48
 
 
+def test_parse_day_month_year_before_clock_when_today_time_has_passed():
+    # 23:27 on 11 Oct. search_dates misses "13 october 2026", so a bare 6am
+    # would roll to the next morning. The written date must win.
+    now = datetime(2026, 10, 11, 15, 27, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_reminder_text(
+        "remind me on 13 october 2026 6am to shave",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    local = parsed.fire_at_utc.astimezone(ZoneInfo("Asia/Singapore"))
+    assert (local.year, local.month, local.day, local.hour, local.minute) == (
+        2026,
+        10,
+        13,
+        6,
+        0,
+    )
+    assert parsed.message == "shave"
+
+
 def test_parse_absolute_date_with_time():
     now = datetime(2026, 9, 22, 11, 35, tzinfo=ZoneInfo("UTC"))
     parsed = parse_reminder_text(

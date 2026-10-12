@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from vpsbot.db.models import RecurrenceKind
 from vpsbot.reminders.bounds import apply_end_bound_from_text
 from vpsbot.reminders.parsing import _clean_message
+from vpsbot.reminders.text_normalize import has_explicit_start_date, interval_days_from_text
 from vpsbot.reminders.schedule_spec import (
     EndKind,
     ParseSource,
@@ -192,7 +193,17 @@ def assemble_from_answers(
     elif time_kind == "unclear":
         pass
 
-    if start_date is None and fallback_start_utc is not None:
+    # "every 7 days at 8pm" has no calendar date. The next 8pm is the first fire.
+    # A fast-parser fallback here is often "in 7 days", which is the interval, not the start.
+    clock_only = time_kind == "specific_time" and not has_explicit_start_date(user_text)
+    if clock_only:
+        date_note = ""
+        start_date = today
+    elif start_date is None and fallback_start_utc is not None and has_explicit_start_date(user_text):
+        local = fallback_start_utc.astimezone(tz)
+        start_date = local.date()
+        hour, minute = local.hour, local.minute
+    elif start_date is None and fallback_start_utc is not None and not clock_only:
         local = fallback_start_utc.astimezone(tz)
         start_date = local.date()
         hour, minute = local.hour, local.minute
@@ -208,6 +219,9 @@ def assemble_from_answers(
         tzinfo=tz,
     )
     start_utc = start_local.astimezone(ZoneInfo("UTC"))
+    if clock_only and start_utc <= now_utc:
+        start_local += timedelta(days=1)
+        start_utc = start_local.astimezone(ZoneInfo("UTC"))
 
     kind_choice = parts["schedule_kind"].choice or "unclear"
     if parts["schedule_kind"].confidence is not None:
@@ -229,7 +243,13 @@ def assemble_from_answers(
         recurrence = RecurrenceKind.DAILY
 
     interval_days: int | None = None
-    if recurrence == RecurrenceKind.INTERVAL:
+    stated_interval = interval_days_from_text(user_text)
+    if stated_interval is not None:
+        recurrence = RecurrenceKind.INTERVAL
+        interval_days = stated_interval[0]
+        if kind_choice in ("unclear", "one_off", "daily", "weekly"):
+            kind_choice = "interval_days"
+    elif recurrence == RecurrenceKind.INTERVAL:
         id_choice = parts["interval_days"].choice
         if parts["interval_days"].confidence is not None:
             confidences.append(parts["interval_days"].confidence)

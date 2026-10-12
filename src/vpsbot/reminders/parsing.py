@@ -11,7 +11,11 @@ import dateparser
 from dateparser.search import search_dates
 
 from vpsbot.db.models import RecurrenceKind
-from vpsbot.reminders.text_normalize import normalize_reminder_text, strip_schedule_duration_phrases
+from vpsbot.reminders.text_normalize import (
+    interval_days_from_text,
+    normalize_reminder_text,
+    strip_schedule_duration_phrases,
+)
 from vpsbot.utils.timezone import format_local, to_utc
 
 RECURRENCE_PATTERNS: list[tuple[re.Pattern[str], RecurrenceKind, str]] = [
@@ -77,6 +81,26 @@ _TIME_TOKEN = re.compile(
     re.I,
 )
 _DAY_ANCHOR = re.compile(r"\b(today|tomorrow)\b", re.I)
+# search_dates drops or splits these ("13 october 2026 6am" -> nothing, or
+# "2026" + "6am" read as 11 June). dateparser.parse on the span itself is reliable.
+_MONTH_NAME = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?"
+)
+_DAY_NUM = r"\d{1,2}(?:st|nd|rd|th)?"
+_CALENDAR_DATE = re.compile(
+    rf"\b(?:"
+    rf"\d{{4}}-\d{{1,2}}-\d{{1,2}}"
+    rf"|{_DAY_NUM}\s+(?:{_MONTH_NAME})(?:\s+\d{{4}})?"
+    rf"|(?:{_MONTH_NAME})\s+{_DAY_NUM}(?:\s+\d{{4}})?"
+    rf")\b",
+    re.I,
+)
+_CALENDAR_DATE_PHRASE = re.compile(
+    rf"(?:\b(?:on|at|by)\s+)?{_CALENDAR_DATE.pattern}",
+    re.I,
+)
 
 WEEKDAY_MAP = {
     "monday": 0,
@@ -128,13 +152,17 @@ def _strip_phrase(text: str, phrase: str) -> str:
     return re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE).strip()
 
 
-def _detect_recurrence(text: str) -> tuple[RecurrenceKind, str | None, str]:
+def _detect_recurrence(text: str) -> tuple[RecurrenceKind, str | None, str, int | None]:
+    interval = interval_days_from_text(text)
+    if interval is not None:
+        n, phrase = interval
+        return RecurrenceKind.INTERVAL, phrase, _strip_phrase(text, phrase), n
     lowered = text.lower()
     for pattern, kind, phrase in RECURRENCE_PATTERNS:
         if pattern.search(lowered):
             remaining = _strip_phrase(text, phrase)
-            return kind, phrase, remaining
-    return RecurrenceKind.NONE, None, text
+            return kind, phrase, remaining, None
+    return RecurrenceKind.NONE, None, text, None
 
 
 def _extract_weekday(phrase: str | None) -> int | None:
@@ -189,6 +217,35 @@ def _normalize_time_token(token: str) -> str | None:
     return None
 
 
+def _explicit_calendar_span(text: str) -> str | None:
+    match = _CALENDAR_DATE.search(text)
+    if not match:
+        return None
+    return match.group(0)
+
+
+def _parse_explicit_calendar(
+    text: str,
+    tz_name: str,
+    now_utc: datetime | None = None,
+) -> datetime | None:
+    """Parse a written calendar date, with the clock token if one is present."""
+    span = _explicit_calendar_span(text)
+    if not span:
+        return None
+    settings = _dateparser_settings(tz_name, now_utc)
+    token = _find_time_token(text)
+    normalized = _normalize_time_token(token) if token else None
+    phrases = [span]
+    if normalized:
+        phrases = [f"{span} {normalized}", f"{normalized} on {span}", span]
+    for phrase in phrases:
+        dt = dateparser.parse(phrase, settings=settings)
+        if dt is not None:
+            return dt
+    return None
+
+
 def _explicit_day_anchor(text: str) -> str | None:
     match = _DAY_ANCHOR.search(text)
     if not match:
@@ -201,6 +258,40 @@ def _day_anchor_in_text(text: str) -> str:
 
 
 _CLOCK_FILLER = re.compile(r"\b(?:at|on|by|around|the|a|an)\b", re.I)
+_DATE_WORD = re.compile(
+    r"\b(?:today|tomorrow|tonight|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+    re.I,
+)
+
+
+def _fragment_is_real_date(fragment: str) -> bool:
+    """Ignore dateparser hits on ordinary words such as 'are' or 'do'."""
+    if re.search(r"\d", fragment):
+        return True
+    return _DATE_WORD.search(fragment) is not None
+
+
+def _schedule_words_only(fragment: str) -> str | None:
+    """Return text to keep when a date hit also swallowed task words.
+
+    None means the whole fragment is schedule text and should be removed.
+    """
+    kept: list[str] = []
+    for word in fragment.split():
+        core = word.strip(".,:;").lower()
+        if not core:
+            continue
+        if _DATE_WORD.fullmatch(core) or _CLOCK_FILLER.fullmatch(core):
+            continue
+        if re.search(r"\d", core) or _normalize_time_token(word):
+            continue
+        kept.append(word)
+    if not kept:
+        return None
+    return " ".join(kept)
 
 
 def _fragment_is_clock_only(fragment: str, token: str) -> bool:
@@ -295,6 +386,9 @@ def _search_dates_filtered(text: str, settings: dict[str, Any]) -> list[tuple[st
 def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = None) -> datetime:
     settings = _dateparser_settings(tz_name, now_utc)
     working = strip_schedule_duration_phrases(_strip_reminder_prefix(text))
+    calendar = _parse_explicit_calendar(working, tz_name, now_utc)
+    if calendar is not None:
+        return to_utc(calendar, tz_name)
     matches = _search_dates_filtered(working, settings)
     token = _find_time_token(working)
     if token and _normalize_time_token(token):
@@ -314,6 +408,7 @@ def _parse_anchor_datetime(text: str, tz_name: str, now_utc: datetime | None = N
                 anchored_utc <= now_cmp
                 and not use_calendar
                 and _explicit_day_anchor(working) is None
+                and _explicit_calendar_span(working) is None
                 and _matches_are_clock_only(matches, token)
             ):
                 return to_utc(anchored + timedelta(days=1), tz_name)
@@ -350,16 +445,26 @@ def _clean_message(
 ) -> str:
     settings = _dateparser_settings(tz_name, now_utc)
     working = strip_schedule_duration_phrases(text)
+    interval = interval_days_from_text(working)
+    if interval is not None:
+        working = _strip_phrase(working, interval[1])
     if recurrence_phrase:
         working = _strip_phrase(working, recurrence_phrase)
+    working = _CALENDAR_DATE_PHRASE.sub(" ", working)
     matches = _search_dates_filtered(working, settings)
     for fragment, _ in reversed(matches):
-        working = working.replace(fragment, " ")
+        if not _fragment_is_real_date(fragment):
+            continue
+        kept = _schedule_words_only(fragment)
+        working = working.replace(fragment, f" {kept} " if kept else " ")
     token = _find_time_token(working)
     if token:
         working = working.replace(token, " ")
     working = re.sub(r"\b(today|tomorrow)\b", " ", working, flags=re.I)
-    working = re.sub(r"\b(at|on|by)\b\s*$", "", working, flags=re.I)
+    working = re.sub(r"(?:^|\s)[\-–—]+(?=\s|$)", " ", working)
+    working = re.sub(r"^\s*(?:at|on|by)\b", " ", working, flags=re.I)
+    working = re.sub(r"\b(?:at|on|by)\s*$", "", working, flags=re.I)
+    working = re.sub(r"^[\s\-–—:,]+|[\s\-–—:,]+$", "", working)
     working = re.sub(r"\s+", " ", working).strip()
     working = re.sub(
         r"^(remind me to|remind me|reminder to|reminder)\s+",
@@ -367,6 +472,7 @@ def _clean_message(
         working,
         flags=re.I,
     ).strip()
+    working = re.sub(r"^to\s+", "", working, flags=re.I).strip()
     return working or "Reminder"
 
 
@@ -374,7 +480,7 @@ def parse_reminder_text(text: str, tz_name: str, now_utc: datetime | None = None
     """Parse free-text reminder input into message, UTC fire time, and recurrence."""
     now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
     text = normalize_reminder_text(text)
-    recurrence, phrase, remainder = _detect_recurrence(text)
+    recurrence, phrase, remainder, interval_days = _detect_recurrence(text)
     try:
         fire_at = _parse_anchor_datetime(remainder if phrase else text, tz_name, now_utc)
     except ParseError:
@@ -400,6 +506,8 @@ def parse_reminder_text(text: str, tz_name: str, now_utc: datetime | None = None
             "hour": fire_at.hour,
             "minute": fire_at.minute,
         }
+        if interval_days is not None:
+            rule["interval_days"] = interval_days
     return ParsedReminder(
         message=message,
         fire_at_utc=fire_at,

@@ -49,11 +49,33 @@ async def test_pipeline_fast_path():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_invokes_jev_on_complex():
+async def test_pipeline_parses_every_n_days_without_jev():
+    now = datetime(2026, 1, 1, 10, 0, tzinfo=ZoneInfo("UTC"))
+    jev = AsyncMock()
+    with patch("vpsbot.reminders.pipeline.parse_with_jev", new=jev):
+        result = await parse_reminder_pipeline(
+            "every 2 days at 8pm for 2 weeks do task",
+            _settings(),
+            now_utc=now,
+        )
+    jev.assert_not_called()
+    assert result.spec is not None
+    assert result.spec.source == ParseSource.FAST
+    assert result.spec.recurrence == RecurrenceKind.INTERVAL
+    assert result.spec.interval_days == 2
+    assert result.spec.end.kind == EndKind.DURATION_DAYS
+    assert result.spec.end.duration_days == 14
+    assert result.spec.message == "do task"
+    local = result.spec.start_at_utc.astimezone(ZoneInfo("UTC"))
+    assert local.hour == 20 and local.minute == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_still_invokes_jev_for_until():
     now = datetime(2026, 1, 1, 10, 0, tzinfo=ZoneInfo("UTC"))
     fake_spec = ScheduleSpec(
         message="task",
-        start_at_utc=now,
+        start_at_utc=datetime(2026, 1, 1, 20, 0, tzinfo=ZoneInfo("UTC")),
         recurrence=RecurrenceKind.INTERVAL,
         interval_days=2,
         end=ScheduleEnd(kind=EndKind.DURATION_DAYS, duration_days=14),
@@ -63,12 +85,13 @@ async def test_pipeline_invokes_jev_on_complex():
     with patch(
         "vpsbot.reminders.pipeline.parse_with_jev",
         new=AsyncMock(return_value=fake_spec),
-    ):
+    ) as jev:
         result = await parse_reminder_pipeline(
-            "every 2 days at 8pm for 2 weeks do task",
+            "every 2 days at 8pm until march do task",
             _settings(),
             now_utc=now,
         )
+    jev.assert_awaited()
     assert result.spec is not None
     assert result.spec.recurrence == RecurrenceKind.INTERVAL
 
