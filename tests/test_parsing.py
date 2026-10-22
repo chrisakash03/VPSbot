@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from vpsbot.reminders.parsing import ParseError, parse_reminder_text
+from vpsbot.reminders.parsing import ParseError, parse_multi_time_reminders, parse_reminder_text
 
 
 def test_parse_simple_reminder():
@@ -205,3 +205,93 @@ def test_parse_daily_recurrence():
     parsed = parse_reminder_text("every day at 8am drink water", "UTC", now_utc=now)
     assert parsed.recurrence.value == "daily"
     assert parsed.recurrence_rule is not None
+
+
+def _local(parsed, tz_name="Asia/Singapore"):
+    return parsed.fire_at_utc.astimezone(ZoneInfo(tz_name))
+
+
+def test_multi_slots_keep_their_own_days_and_bare_times_are_today():
+    # 10:00 SGT on Thursday 22 Oct 2026.
+    now = datetime(2026, 10, 22, 2, 0, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_multi_time_reminders(
+        "do this 3pm, tomorrow 5pm, next wednesday 8pm, 11pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    assert parsed is not None
+    assert len(parsed) == 4
+    assert {item.message for item in parsed} == {"do this"}
+    assert [(_local(item).month, _local(item).day, _local(item).hour) for item in parsed] == [
+        (10, 22, 15),
+        (10, 23, 17),
+        (10, 28, 20),
+        (10, 22, 23),
+    ]
+    assert _local(parsed[2]).strftime("%A") == "Wednesday"
+
+
+def test_next_weekday_skips_to_the_following_week_when_today_is_that_day():
+    # 10:00 SGT on Wednesday 21 Oct 2026. "next wednesday" is 28 Oct, not today.
+    now = datetime(2026, 10, 21, 2, 0, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_multi_time_reminders(
+        "do this 8pm, next wednesday 8pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    assert parsed is not None
+    assert (_local(parsed[0]).day, _local(parsed[0]).hour) == (21, 20)
+    assert (_local(parsed[1]).day, _local(parsed[1]).hour) == (28, 20)
+    assert _local(parsed[1]).strftime("%A") == "Wednesday"
+
+
+def test_multi_same_day_times():
+    # 07:00 SGT on 22 Oct, so 8am, 3pm, and 8pm are still today.
+    now = datetime(2026, 10, 21, 23, 0, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_multi_time_reminders(
+        "take meds at 8am, 3pm, 8pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    assert parsed is not None
+    assert [item.message for item in parsed] == ["take meds", "take meds", "take meds"]
+    assert [(_local(item).day, _local(item).hour) for item in parsed] == [
+        (22, 8),
+        (22, 15),
+        (22, 20),
+    ]
+
+
+def test_comma_with_one_time_is_not_a_multi_list():
+    now = datetime(2026, 10, 22, 2, 0, tzinfo=ZoneInfo("UTC"))
+    assert (
+        parse_multi_time_reminders("buy milk, eggs at 5pm", "Asia/Singapore", now_utc=now)
+        is None
+    )
+
+
+def test_multi_past_slot_rejects_the_whole_list():
+    # 16:00 SGT, so 3pm today has passed. Tomorrow is still valid, but nothing is returned.
+    now = datetime(2026, 10, 22, 8, 0, tzinfo=ZoneInfo("UTC"))
+    with pytest.raises(ParseError, match="3pm"):
+        parse_multi_time_reminders(
+            "do this 3pm, tomorrow 5pm",
+            "Asia/Singapore",
+            now_utc=now,
+        )
+
+
+def test_multi_copies_every_day_onto_each_slot():
+    now = datetime(2026, 10, 21, 23, 0, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_multi_time_reminders(
+        "take meds every day at 9am, 3pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    assert parsed is not None
+    assert len(parsed) == 2
+    assert {item.message for item in parsed} == {"take meds"}
+    assert {item.recurrence.value for item in parsed} == {"daily"}
+    assert _local(parsed[0]).day == _local(parsed[1]).day == 22
+    assert _local(parsed[0]).hour == 9
+    assert _local(parsed[1]).hour == 15

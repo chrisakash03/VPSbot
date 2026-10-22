@@ -10,10 +10,21 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from vpsbot.bot.delivery import resolve_notify_chat_id, strip_pm_modifier
 from vpsbot.bot.deps import BotContext
 from vpsbot.db.models import RecurrenceKind
-from vpsbot.reminders.formatting import format_schedule_preview, format_schedule_summary
+from vpsbot.reminders.bounds import apply_end_bound_from_text
+from vpsbot.reminders.formatting import (
+    format_multi_schedule_summary,
+    format_schedule_preview,
+    format_schedule_summary,
+)
+from vpsbot.reminders.parsing import ParseError, parse_multi_time_reminders
 from vpsbot.reminders.pending import delete_pending, get_pending, save_pending
 from vpsbot.reminders.pipeline import parse_reminder_pipeline
-from vpsbot.reminders.schedule_spec import ReviewAction, ScheduleEnd, validate_schedule_spec
+from vpsbot.reminders.schedule_spec import (
+    ReviewAction,
+    ScheduleEnd,
+    parsed_reminder_to_spec,
+    validate_schedule_spec,
+)
 from vpsbot.reminders.service import (
     cancel_reminder,
     create_reminder_from_spec,
@@ -69,6 +80,43 @@ async def process_reminder_request(
         return
 
     notify_chat_id = resolve_notify_chat_id(message, deliver_via_pm)
+
+    try:
+        multi = parse_multi_time_reminders(text, ctx.settings.timezone)
+    except ParseError as exc:
+        await message.answer(str(exc))
+        return
+    if multi:
+        now = datetime.now(ZoneInfo("UTC"))
+        specs = []
+        for parsed in multi:
+            spec = apply_end_bound_from_text(text, parsed_reminder_to_spec(parsed))
+            errors = validate_schedule_spec(spec, now)
+            if errors:
+                await message.answer("; ".join(errors))
+                return
+            specs.append(spec)
+        async with ctx.session_factory() as session:
+            reminders = [
+                await create_reminder_from_spec(
+                    session,
+                    user_id=message.from_user.id,
+                    chat_id=message.chat.id,
+                    notify_chat_id=notify_chat_id,
+                    spec=spec,
+                )
+                for spec in specs
+            ]
+        for reminder in reminders:
+            await ctx.scheduler.schedule_reminder(reminder)
+        await message.answer(
+            format_multi_schedule_summary(
+                specs,
+                ctx.settings.timezone,
+                deliver_via_pm=deliver_via_pm,
+            )
+        )
+        return
 
     result = await parse_reminder_pipeline(text, ctx.settings)
     if result.error:

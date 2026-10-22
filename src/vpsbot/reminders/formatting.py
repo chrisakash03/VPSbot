@@ -22,6 +22,34 @@ def format_schedule_preview(spec: ScheduleSpec, tz_name: str) -> str:
     return " ".join(parts)
 
 
+def format_multi_schedule_summary(
+    specs: list[ScheduleSpec],
+    tz_name: str,
+    *,
+    deliver_via_pm: bool = False,
+) -> str:
+    """One reply listing each fire time, in the order the user typed them."""
+    message = specs[0].message
+    if deliver_via_pm:
+        opener = f"Got it — I'll DM you about '{message}' at:"
+    else:
+        opener = f"Got it — I'll remind this chat about '{message}' at:"
+    lines = [opener, *[format_local(spec.start_at_utc, tz_name) for spec in specs]]
+    spec = specs[0]
+    if spec.recurrence != RecurrenceKind.NONE:
+        recur = spec.recurrence.value
+        if spec.recurrence == RecurrenceKind.INTERVAL and spec.interval_days:
+            recur = f"every {spec.interval_days} days"
+        lines.append(f"Repeats: {recur}.")
+        if spec.end.kind == EndKind.UNTIL_UTC and spec.end.until_utc:
+            lines.append(f"Until {format_local(spec.end.until_utc, tz_name)}.")
+        elif spec.end.kind == EndKind.MAX_OCCURRENCES and spec.end.remaining_occurrences:
+            lines.append(f"For {spec.end.remaining_occurrences} times.")
+        elif spec.end.kind == EndKind.DURATION_DAYS and spec.end.duration_days:
+            lines.append(f"For {spec.end.duration_days} days.")
+    return "\n".join(lines)
+
+
 def format_schedule_summary(
     spec: ScheduleSpec,
     tz_name: str,

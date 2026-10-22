@@ -520,3 +520,160 @@ def recurrence_rule_to_json(rule: dict[str, Any] | None) -> str | None:
     if rule is None:
         return None
     return json.dumps(rule)
+
+
+_MAX_TIME_SLOTS = 8
+_WEEKDAY_NAME = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.I,
+)
+_NEXT_WEEKDAY = re.compile(
+    r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.I,
+)
+_FOR_TIMES = re.compile(r"\bfor\s+\d+\s+times\b", re.I)
+
+
+def _clock_tokens(text: str) -> list[str]:
+    return [
+        match.group("t")
+        for match in _TIME_TOKEN.finditer(text)
+        if _normalize_time_token(match.group("t"))
+    ]
+
+
+def _slot_has_day(text: str) -> bool:
+    return bool(
+        _DAY_ANCHOR.search(text)
+        or _WEEKDAY_NAME.search(text)
+        or _explicit_calendar_span(text)
+        or _NEXT_WEEKDAY.search(text)
+    )
+
+
+def _weekday_in_following_week(today: date, weekday: int) -> date:
+    """Weekday in the week after the one that contains ``today`` (Monday-start)."""
+    days_until_next_monday = 7 - today.weekday()
+    next_monday = today + timedelta(days=days_until_next_monday)
+    return next_monday + timedelta(days=weekday)
+
+
+def _slot_time_phrase(slot: str, tz_name: str, now_utc: datetime) -> str:
+    """Turn one comma slot into a single date phrase the fast parser accepts."""
+    working = strip_schedule_duration_phrases(slot)
+    recurrence, phrase, remainder, _interval = _detect_recurrence(working)
+    if recurrence != RecurrenceKind.NONE and phrase:
+        working = remainder
+    next_day = _NEXT_WEEKDAY.search(working)
+    if next_day:
+        weekday = WEEKDAY_MAP[next_day.group(1).lower()]
+        local_today = now_utc.astimezone(ZoneInfo(tz_name)).date()
+        day = _weekday_in_following_week(local_today, weekday)
+        working = _NEXT_WEEKDAY.sub(day.isoformat(), working, count=1)
+        return working
+    if not _slot_has_day(working):
+        return f"today {working}"
+    return working
+
+
+def _shared_multi_message(text: str, recurrence_phrase: str | None) -> str:
+    working = strip_schedule_duration_phrases(text)
+    interval = interval_days_from_text(working)
+    if interval is not None:
+        working = _strip_phrase(working, interval[1])
+    if recurrence_phrase:
+        working = _strip_phrase(working, recurrence_phrase)
+    working = _FOR_TIMES.sub(" ", working)
+    working = _NEXT_WEEKDAY.sub(" ", working)
+    working = _CALENDAR_DATE_PHRASE.sub(" ", working)
+    working = _TIME_TOKEN.sub(" ", working)
+    working = re.sub(r"\b(?:today|tomorrow|tonight)\b", " ", working, flags=re.I)
+    working = _WEEKDAY_NAME.sub(" ", working)
+    working = working.replace(",", " ")
+    working = re.sub(r"(?:^|\s)[\-–—]+(?=\s|$)", " ", working)
+    working = re.sub(r"^\s*(?:at|on|by)\b", " ", working, flags=re.I)
+    working = re.sub(r"\b(?:at|on|by)\s*$", "", working, flags=re.I)
+    working = re.sub(r"^[\s\-–—:,]+|[\s\-–—:,]+$", "", working)
+    working = re.sub(r"\s+", " ", working).strip()
+    working = re.sub(
+        r"^(remind me to|remind me|reminder to|reminder)\s+",
+        "",
+        working,
+        flags=re.I,
+    ).strip()
+    working = re.sub(r"^to\s+", "", working, flags=re.I).strip()
+    return working or "Reminder"
+
+
+def _rule_for_fire(
+    fire_at: datetime,
+    recurrence: RecurrenceKind,
+    phrase: str | None,
+    interval_days: int | None,
+) -> dict[str, Any] | None:
+    if recurrence == RecurrenceKind.NONE:
+        return None
+    rule: dict[str, Any] = {
+        "kind": recurrence.value,
+        "anchor_utc": fire_at.isoformat(),
+        "weekday": _extract_weekday(phrase or ""),
+        "month": fire_at.month,
+        "day": fire_at.day,
+        "hour": fire_at.hour,
+        "minute": fire_at.minute,
+    }
+    if interval_days is not None:
+        rule["interval_days"] = interval_days
+    return rule
+
+
+def parse_multi_time_reminders(
+    text: str,
+    tz_name: str,
+    now_utc: datetime | None = None,
+) -> list[ParsedReminder] | None:
+    """Parse a comma-separated list of times into one reminder per slot.
+
+    Returns None when the text is not a multi-time list (no comma, or fewer
+    than two clock times), so the caller can use the single-reminder parser.
+    A slot with only a clock time is today and is not rolled to tomorrow.
+    """
+    now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
+    text = normalize_reminder_text(text)
+    if "," not in text or len(_clock_tokens(text)) < 2:
+        return None
+
+    slots = [part.strip() for part in text.split(",")]
+    if any(not slot for slot in slots):
+        raise ParseError("One of the comma-separated times is empty.")
+    if len(slots) > _MAX_TIME_SLOTS:
+        raise ParseError("Use at most 8 times in one message.")
+
+    for slot in slots:
+        count = len(_clock_tokens(slot))
+        if count != 1:
+            raise ParseError(f"Each part needs one time: '{slot}'.")
+
+    recurrence, phrase, _remainder, interval_days = _detect_recurrence(text)
+    message = _shared_multi_message(text, phrase)
+    parsed: list[ParsedReminder] = []
+    seen: set[datetime] = set()
+    for slot in slots:
+        phrase_for_slot = _slot_time_phrase(slot, tz_name, now_utc)
+        try:
+            slot_parsed = parse_reminder_text(phrase_for_slot, tz_name, now_utc=now_utc)
+        except ParseError as exc:
+            raise ParseError(f"Could not use '{slot}': {exc}") from exc
+        fire_at = slot_parsed.fire_at_utc
+        if fire_at in seen:
+            continue
+        seen.add(fire_at)
+        parsed.append(
+            ParsedReminder(
+                message=message,
+                fire_at_utc=fire_at,
+                recurrence=recurrence,
+                recurrence_rule=_rule_for_fire(fire_at, recurrence, phrase, interval_days),
+            )
+        )
+    return parsed
