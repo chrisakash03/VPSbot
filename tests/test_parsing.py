@@ -226,7 +226,7 @@ def test_multi_slots_keep_their_own_days_and_bare_times_are_today():
         (10, 22, 15),
         (10, 23, 17),
         (10, 28, 20),
-        (10, 22, 23),
+        (10, 28, 23),
     ]
     assert _local(parsed[2]).strftime("%A") == "Wednesday"
 
@@ -279,6 +279,46 @@ def test_multi_past_slot_rejects_the_whole_list():
             "Asia/Singapore",
             now_utc=now,
         )
+
+
+def test_task_commas_stay_in_the_message_and_bare_times_keep_tomorrow():
+    # 23:58 SGT. 12pm and 1pm today have passed, so they must stay on tomorrow.
+    now = datetime(2026, 10, 22, 15, 58, tzinfo=ZoneInfo("UTC"))
+    task = "schedule telegram messages, draft emails and update nadya"
+    leading = parse_multi_time_reminders(
+        f"tomorrow 11am, 12pm, 1pm {task}",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    trailing = parse_multi_time_reminders(
+        f"{task} tomorrow 11am, 12pm, 1pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    for parsed in (leading, trailing):
+        assert parsed is not None
+        assert len(parsed) == 3
+        assert {item.message for item in parsed} == {task}
+        assert [(_local(item).day, _local(item).hour) for item in parsed] == [
+            (23, 11),
+            (23, 12),
+            (23, 13),
+        ]
+
+
+def test_bare_time_before_a_named_day_stays_today():
+    now = datetime(2026, 10, 22, 2, 0, tzinfo=ZoneInfo("UTC"))
+    parsed = parse_multi_time_reminders(
+        "11am, tomorrow 12pm, 1pm",
+        "Asia/Singapore",
+        now_utc=now,
+    )
+    assert parsed is not None
+    assert [(_local(item).day, _local(item).hour) for item in parsed] == [
+        (22, 11),
+        (23, 12),
+        (23, 13),
+    ]
 
 
 def test_multi_copies_every_day_onto_each_slot():

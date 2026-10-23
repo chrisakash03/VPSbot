@@ -543,12 +543,24 @@ def _clock_tokens(text: str) -> list[str]:
 
 
 def _slot_has_day(text: str) -> bool:
-    return bool(
-        _DAY_ANCHOR.search(text)
-        or _WEEKDAY_NAME.search(text)
-        or _explicit_calendar_span(text)
-        or _NEXT_WEEKDAY.search(text)
-    )
+    return _explicit_day_phrase(text) is not None
+
+
+def _explicit_day_phrase(text: str) -> str | None:
+    """Return the day words on a slot, if it names one."""
+    match = _NEXT_WEEKDAY.search(text)
+    if match:
+        return match.group(0)
+    span = _explicit_calendar_span(text)
+    if span:
+        return span
+    match = _DAY_ANCHOR.search(text)
+    if match:
+        return match.group(0)
+    match = _WEEKDAY_NAME.search(text)
+    if match:
+        return match.group(0)
+    return None
 
 
 def _weekday_in_following_week(today: date, weekday: int) -> date:
@@ -576,8 +588,9 @@ def _slot_time_phrase(slot: str, tz_name: str, now_utc: datetime) -> str:
     return working
 
 
-def _shared_multi_message(text: str, recurrence_phrase: str | None) -> str:
-    working = strip_schedule_duration_phrases(text)
+def _message_fragment(slot: str, recurrence_phrase: str | None) -> str:
+    """Task words left in one comma part after its clock time and day are removed."""
+    working = strip_schedule_duration_phrases(slot)
     interval = interval_days_from_text(working)
     if interval is not None:
         working = _strip_phrase(working, interval[1])
@@ -589,20 +602,23 @@ def _shared_multi_message(text: str, recurrence_phrase: str | None) -> str:
     working = _TIME_TOKEN.sub(" ", working)
     working = re.sub(r"\b(?:today|tomorrow|tonight)\b", " ", working, flags=re.I)
     working = _WEEKDAY_NAME.sub(" ", working)
-    working = working.replace(",", " ")
-    working = re.sub(r"(?:^|\s)[\-–—]+(?=\s|$)", " ", working)
-    working = re.sub(r"^\s*(?:at|on|by)\b", " ", working, flags=re.I)
-    working = re.sub(r"\b(?:at|on|by)\s*$", "", working, flags=re.I)
-    working = re.sub(r"^[\s\-–—:,]+|[\s\-–—:,]+$", "", working)
-    working = re.sub(r"\s+", " ", working).strip()
-    working = re.sub(
-        r"^(remind me to|remind me|reminder to|reminder)\s+",
-        "",
-        working,
-        flags=re.I,
-    ).strip()
-    working = re.sub(r"^to\s+", "", working, flags=re.I).strip()
-    return working or "Reminder"
+    working = re.sub(r"\b(?:at|on|by)\b", " ", working, flags=re.I)
+    working = re.sub(r"\s+", " ", working).strip(" ,.-")
+    return working
+
+
+def _clock_phrase(slot: str, carried_day: str | None, tz_name: str, now_utc: datetime) -> tuple[str, str]:
+    """Return a day-and-time phrase, and the day later bare times should keep."""
+    working = strip_schedule_duration_phrases(slot)
+    _recurrence, phrase, remainder, _interval = _detect_recurrence(working)
+    if phrase:
+        working = remainder
+    day = _explicit_day_phrase(working) or carried_day or "today"
+    token = _find_time_token(working)
+    normalized = _normalize_time_token(token or "")
+    if not normalized:
+        raise ParseError(f"Could not use '{slot}'.")
+    return _slot_time_phrase(f"{day} {normalized}", tz_name, now_utc), day
 
 
 def _rule_for_fire(
@@ -636,7 +652,8 @@ def parse_multi_time_reminders(
 
     Returns None when the text is not a multi-time list (no comma, or fewer
     than two clock times), so the caller can use the single-reminder parser.
-    A slot with only a clock time is today and is not rolled to tomorrow.
+    Commas inside the task stay in the message. A bare time keeps the day
+    named by the previous time, and otherwise means today.
     """
     now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
     text = normalize_reminder_text(text)
@@ -646,20 +663,40 @@ def parse_multi_time_reminders(
     slots = [part.strip() for part in text.split(",")]
     if any(not slot for slot in slots):
         raise ParseError("One of the comma-separated times is empty.")
-    if len(slots) > _MAX_TIME_SLOTS:
-        raise ParseError("Use at most 8 times in one message.")
-
-    for slot in slots:
-        count = len(_clock_tokens(slot))
-        if count != 1:
-            raise ParseError(f"Each part needs one time: '{slot}'.")
 
     recurrence, phrase, _remainder, interval_days = _detect_recurrence(text)
-    message = _shared_multi_message(text, phrase)
+    message_bits: list[str] = []
+    time_slots: list[tuple[str, str]] = []
+    carried_day: str | None = None
+    for slot in slots:
+        count = len(_clock_tokens(slot))
+        if count > 1:
+            raise ParseError(f"Each part needs one time: '{slot}'.")
+        fragment = _message_fragment(slot, phrase)
+        if fragment:
+            message_bits.append(fragment)
+        if count == 0:
+            continue
+        phrase_for_slot, carried_day = _clock_phrase(slot, carried_day, tz_name, now_utc)
+        time_slots.append((slot, phrase_for_slot))
+
+    if len(time_slots) < 2:
+        return None
+    if len(time_slots) > _MAX_TIME_SLOTS:
+        raise ParseError("Use at most 8 times in one message.")
+
+    message = ", ".join(message_bits)
+    message = re.sub(
+        r"^(remind me to|remind me|reminder to|reminder)\s+",
+        "",
+        message,
+        flags=re.I,
+    ).strip()
+    message = re.sub(r"^to\s+", "", message, flags=re.I).strip() or "Reminder"
+
     parsed: list[ParsedReminder] = []
     seen: set[datetime] = set()
-    for slot in slots:
-        phrase_for_slot = _slot_time_phrase(slot, tz_name, now_utc)
+    for slot, phrase_for_slot in time_slots:
         try:
             slot_parsed = parse_reminder_text(phrase_for_slot, tz_name, now_utc=now_utc)
         except ParseError as exc:
